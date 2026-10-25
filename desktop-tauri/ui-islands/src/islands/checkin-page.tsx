@@ -8,6 +8,7 @@ import {
   bridge, claimOnboarding, getCheckinStore, groupTone, loadCheckinCenter, nextScheduleRun,
   onboardingExpanded, queryOnboarding, runAllCheckin, setCheckinTab, showCheckinTab,
   signSingleAccount, subscribeCheckinStore, toggleOnboardingExpand, toggleProviderExpand,
+  emptyPlatformsExpanded, toggleEmptyPlatforms,
   growthExpanded, queryGrowth, runGrowth, runGrowthSchool, runGrowthTravel, toggleGrowthExpand,
   type CheckinProviderGroup, type CheckinStore, type CheckinTab,
 } from './checkin-state'
@@ -765,11 +766,33 @@ function CenterTab({ store }: { store: CheckinStore }) {
             </Button>
           </div>
           <div>
-            {(daily?.providers ?? []).map(group =>
-              group.totalCount > 0
-                ? <ProviderRow key={group.id} group={group} expanded={store.expanded.has(group.id)} />
-                : <EmptyProviderRow key={group.id} group={group} />,
+            {/* 有账号的排在前面正常展示；无账号的收进一个默认折叠的分组 ——
+                刚装好时页面不再被一排「无账号」占位填满，想看全量平台时点一下
+                展开（展开状态记在 store 的 expanded 集合里，切页回来不丢）。
+                两段各自保持后端快照里的原有顺序（只做有无账号的稳定划分）。 */}
+            {(daily?.providers ?? []).filter(group => group.totalCount > 0).map(group =>
+              <ProviderRow key={group.id} group={group} expanded={store.expanded.has(group.id)} />,
             )}
+            {(daily?.providers ?? []).some(group => group.totalCount === 0) ? (
+              <>
+                <div className='ck-empty-toggle'>
+                  <Button
+                    size='sm'
+                    variant='ghost'
+                    onClick={() => toggleEmptyPlatforms()}
+                  >
+                    {emptyPlatformsExpanded()
+                      ? t('收起无账号的平台（{count}）', { count: (daily?.providers ?? []).filter(group => group.totalCount === 0).length })
+                      : t('展开无账号的平台（{count}）', { count: (daily?.providers ?? []).filter(group => group.totalCount === 0).length })}
+                  </Button>
+                </div>
+                {emptyPlatformsExpanded()
+                  ? (daily?.providers ?? []).filter(group => group.totalCount === 0).map(group =>
+                      <EmptyProviderRow key={group.id} group={group} />,
+                    )
+                  : null}
+              </>
+            ) : null}
             {(daily?.outOfScope ?? []).length > 0 ? (
               <div className='ck-fold-note'>
                 {t('不参与每日签到：{list}。CodeArts 的一次性奖励在下方「新手福利」，它的每日福利就在上方「每日签到」里；ZCode 的套餐领取见「活动福利」。', {

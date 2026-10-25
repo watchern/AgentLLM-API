@@ -104,6 +104,15 @@
 .ck-prov-row.open .ck-chev { transform: rotate(90deg); }
 .ck-prov-detail { display: none; padding: 2px 16px 12px 58px; }
 .ck-prov-row.open .ck-prov-detail { display: block; }
+/* 「无账号的平台」折叠开关行（每日签到卡中段；默认收起，点开列出全部无账号平台） */
+.ck-empty-toggle {
+  display: flex;
+  justify-content: center;
+  padding: 6px 16px;
+  border-top: 1px solid var(--hairline);
+  background: var(--surface-2);
+}
+
 /* 范围外账号的折叠说明（每日签到卡底部） */
 .ck-fold-note {
   padding: 9px 16px;

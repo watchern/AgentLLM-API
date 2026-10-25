@@ -545,6 +545,25 @@ export function toggleProviderExpand(id: string): void {
 }
 
 /**
+ * 「无账号的平台」折叠组的展开 / 收起。
+ *
+ * 每日签到列表把没有账号的平台**收进一个默认折叠的分组**（有账号的排在前面
+ * 正常展示）：刚装好时页面不再被一排「无账号」占位填满，想看全量平台时一键
+ * 展开。与下面的 `onb:` 前缀同一约定 —— 共用 `expanded` 集合（展开状态随
+ * store 存活，切标签页 / 切页回来不丢）。
+ */
+const EMPTY_PLATFORMS_KEY = 'empty-platforms'
+
+export function toggleEmptyPlatforms(): void {
+  toggleProviderExpand(EMPTY_PLATFORMS_KEY)
+}
+
+/** 「无账号的平台」折叠组当前是否展开（缺省收起） */
+export function emptyPlatformsExpanded(): boolean {
+  return store.expanded.has(EMPTY_PLATFORMS_KEY)
+}
+
+/**
  * 展开 / 收起一个账号的新手任务清单。
  *
  * 键加 `onb:` 前缀与每日签到的提供商分组共用同一个 `expanded` 集合（两边的
