@@ -308,9 +308,17 @@ pub fn is_reserved(key: &str) -> bool {
 /// 两条都是 `CREATE INDEX IF NOT EXISTS`（与其余版本的幂等纪律一致）：在存量库
 /// 上建索引要扫一遍表，代价与表大小成正比、只付一次；`requests` 只有几万行时
 /// 在百毫秒量级，不会让启动明显变慢。**不要把这两条往 [`V1_SCHEMA`] 里补**：
-/// 新库按 1→15 依次跑，v15 那一步同样会建出来，而 v1 里多写一份等于同一条索引
+/// 新库按 1→16 依次跑，v15 那一步同样会建出来，而 v1 里多写一份等于同一条索引
 /// 有了两处定义 —— 将来改一处忘一处，正是 `V4_SCHEMA` 那类错位的来源。
-pub const SCHEMA_VERSION: i64 = 15;
+///
+/// ── v16：AI 助手的对话会话（[`V16_SCHEMA`]）──────────────────
+/// 助手从「一次性对话」变成「有历史记录的会话」：左边一列会话、右边一条消息流，
+/// 关掉页面再回来还能接着聊。存**整条消息流的 JSON**（而不是逐条消息一行）的
+/// 理由与 `kv` 表同一取向：读写单元天然是「一整个会话」，逐条存只会让每次保存
+/// 变成 N 次写入 + 一次事务，而没有任何一处需要「按单条消息查」。
+/// 这条迁移自上游 v3.3.0 系列原样移植（本后端暂不读写这张表，移植它只是为了
+/// 与 3.3.0 构建共用同一个 `user_version`，见 [`V16_SCHEMA`] 的说明）。
+pub const SCHEMA_VERSION: i64 = 16;
 
 /// 版本 1 的全部表与索引：改造前所有 JSON / JSONL 文件的对应形态。
 ///
@@ -814,6 +822,27 @@ CREATE INDEX IF NOT EXISTS idx_requests_summary ON requests(
 );
 ";
 
+/// v16：AI 助手的对话会话表（与上游 v3.3.0 系列的 [`V16_SCHEMA`] 逐字一致）。
+///
+/// 本切片与 3.3.0 并存（用户可能来回换着用）：3.3.0-beta.3 把库升到 16 并写入
+/// 会话数据，本程序若停在 15 就拒绝打开（`migrate` 的保护分支）。因此把这条
+/// 迁移**原样移植**过来 —— 本后端的助手接口不读这张表（会话侧 UI 未接入），
+/// 表在库里闲置无害；关键是 `user_version` 双方都认 16，库在两个构建之间
+/// 来回打开都不再被版本闸拦下。
+const V16_SCHEMA: &str = "
+-- ── assistant_sessions：AI 助手的对话会话（schema v16）───────
+CREATE TABLE IF NOT EXISTS assistant_sessions (
+  id          TEXT PRIMARY KEY,
+  title       TEXT NOT NULL DEFAULT '',
+  messages    TEXT NOT NULL DEFAULT '[]',
+  model       TEXT,
+  reasoning   TEXT,
+  created_at  INTEGER NOT NULL DEFAULT 0,
+  updated_at  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_sessions_updated ON assistant_sessions(updated_at DESC);
+";
+
 /// 把库升到 [`SCHEMA_VERSION`]（幂等：已是最新版时什么都不做）。
 ///
 /// **库版本高于本程序时返回 `Err` 拒绝打开**（v14 起有意反转的一条既有决定，
@@ -977,6 +1006,11 @@ fn apply_version(
         // v15：requests 补两条索引（status 的定位 + 报表窄列的覆盖，见
         // V15_SCHEMA 与 SCHEMA_VERSION 的 v15 段）。
         15 => conn.execute_batch(V15_SCHEMA),
+        // v16：assistant_sessions 助手对话会话表（自上游 v3.3.0 系列原样移植，
+        // 见 V16_SCHEMA 与 SCHEMA_VERSION 的 v16 段）。新表用
+        // CREATE IF NOT EXISTS，幂等 —— 已被 3.3.0 升到 16 的库走到这里
+        // 只是把版本号落回本程序认识的位置。
+        16 => conn.execute_batch(V16_SCHEMA),
         _ => Ok(()),
     }
 }
