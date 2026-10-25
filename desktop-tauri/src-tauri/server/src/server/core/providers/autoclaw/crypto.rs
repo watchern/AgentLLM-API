@@ -234,6 +234,18 @@ pub fn decrypt_enc_value(value: &str, aes_key: Option<&[u8]>) -> Result<String, 
     let blob = OS_CRYPT_BASE64
         .decode(encoded.trim())
         .map_err(|_| "AutoClaw 加密字段不是合法 base64".to_string())?;
+    decrypt_os_crypt_blob(&blob, key)
+}
+
+/// 解密**裸 os_crypt blob**（`v10` + nonce + 密文 + tag 的原始字节）。
+///
+/// 与 [`decrypt_enc_value`] 的区别只在输入形态：新版 official 客户端把整份
+/// 凭证 JSON 加密后直接写进 `account-credentials.enc` 二进制文件 —— 没有
+/// `enc:` 前缀、没有 base64，文件内容**就是**这段 blob。v10 版本校验、
+/// 长度守卫与 AES-256-GCM 解密同 `decrypt_enc_value` 共用一套（本函数）。
+///
+/// 密钥必填（这个文件没有明文形态）：由调用方从同目录的 `Local State` 取。
+pub fn decrypt_os_crypt_blob(blob: &[u8], aes_key: &[u8]) -> Result<String, String> {
     if blob.len() < 3 {
         return Err("AutoClaw 加密字段长度异常（不足版本前缀）".to_string());
     }
@@ -248,7 +260,7 @@ pub fn decrypt_enc_value(value: &str, aes_key: Option<&[u8]>) -> Result<String, 
     let nonce = &payload[..NONCE_LEN];
     // 密文 + 尾部 tag 整段交给 aes-gcm（Postfix tag，见模块头）
     let body = &payload[NONCE_LEN..];
-    let plaintext = aes_gcm_decrypt(key, nonce, body)?;
+    let plaintext = aes_gcm_decrypt(aes_key, nonce, body)?;
     String::from_utf8(plaintext).map_err(|_| "解密结果不是合法 UTF-8 文本".to_string())
 }
 

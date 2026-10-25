@@ -9,6 +9,9 @@
 //!   credentials.rs  凭证来源（auth.json 解密 / openclaw.json 明文 /
 //!                   环境变量 / 账号记录）+ mtime 缓存，
 //!                   移植来源：`autoclaw-local-auth.mjs`
+//!   official.rs     新版官方客户端（AutoClaw-official）的登录态布局：
+//!                   accounts/<accountKey>/account-credentials.enc（裸 os_crypt
+//!                   blob）+ 活动账号标记 + 设备 id / 邮箱的旁路文件
 //!   refresh.rs      token 刷新（单飞 + 400002 降级重试；**只读不回写**），
 //!                   移植来源：`autoclaw-upstream-client.mjs` 的刷新链
 //!   models.rs       模型路由表（静态映射 + `zai_auto` 回退规则 + **远程目录**
@@ -52,7 +55,6 @@
 //! credentials::DEFAULT_UPSTREAM_BASE_URL
 //! credentials::upstream_base_url()     ← 含 AUTOCLAW_UPSTREAM_BASE_URL 覆盖
 //! credentials::userapi_base_url()      ← 刷新接口域
-//! credentials::desktop_auth_file()     Option<PathBuf>（非 Windows = None）
 //! credentials::gateway_config_file()   PathBuf
 //! credentials::snapshot_for(record: Option<&Value>) -> Result<AutoClawCredentials, GatewayError>
 //! credentials::local_credentials()     -> Result<AutoClawCredentials, GatewayError>
@@ -106,6 +108,7 @@ pub mod credentials;
 pub mod login;
 pub mod models;
 pub mod oauth;
+pub mod official;
 pub mod profile;
 pub mod promotion;
 pub mod prompt;

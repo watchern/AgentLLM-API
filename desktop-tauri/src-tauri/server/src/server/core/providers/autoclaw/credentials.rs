@@ -3,8 +3,12 @@
 //! + `autoclaw-upstream-client.mjs`）。
 //!
 //! ── 两个凭证来源与优先级（源实现 `getCredentials`）───────────
-//!   1. **主来源**：`%APPDATA%/AutoClaw/auth.json` 的 `token` / `refreshToken`
-//!      字段（`enc:` 前缀 = safeStorage 密文，解密链见 `crypto.rs`）。
+//!   1. **主来源**：桌面端登录态文件（safeStorage 密文，解密链见 `crypto.rs`），
+//!      **两种布局**（候选目录见 `user_data_dirs`，`official.rs` 负责新布局）：
+//!        - 老版：`%APPDATA%/AutoClaw/auth.json` 的 `token` / `refreshToken`
+//!          字段（`enc:` 前缀）；
+//!        - 新版 official：`%APPDATA%/AutoClaw-official/accounts/<accountKey>/
+//!          account-credentials.enc`（裸 os_crypt blob，整份 JSON 加密）。
 //!      能解出 refreshToken，因此**支持自主刷新**。
 //!   2. **备来源**：`~/.openclaw-autoclaw/openclaw.json` 里
 //!      `models.providers.*.models[].headers['X-Authorization']` 的明文 JWT。
@@ -236,39 +240,62 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// AutoClaw 用户数据目录（源实现 `defaultUserDataDir`）：
-/// `AUTOCLAW_USER_DATA_DIR` > `%APPDATA%/AutoClaw`。
+/// AutoClaw 用户数据目录的**候选清单**（按优先级）。
 ///
-/// 源实现在非 Windows 上返回 null（整条 auth.json 来源不可用）——
-/// 这里保持同一语义：**返回 None 而不是猜一个路径**。下游会给出
-/// 「仅支持 Windows」的中文错误，随后回落到 openclaw.json 来源。
-fn default_user_data_dir() -> Option<PathBuf> {
+/// 官方客户端改过 userData 目录名，因此不止一个候选（去重、保序）：
+///   1. `AUTOCLAW_USER_DATA_DIR` 环境变量（历史旁路，最优先）；
+///   2. `%APPDATA%/AutoClaw` —— 老版布局（`auth.json` + `Local State`）；
+///   3. `%APPDATA%/AutoClaw-official` —— 新版 official 布局
+///      （`accounts/<accountKey>/account-credentials.enc`，见 `official.rs`）。
+///
+/// 每个候选目录里**两种布局都会试**（见 `from_auth_file`）：目录名与布局
+/// 不是一一对应 —— 官方安装器两个目录都会创建（本机实测），用户也可能用
+/// 环境变量指向自定义位置的任一布局。
+///
+/// 非 Windows 上老布局与 DPAPI 解密不可用，但清单照常给出（错误文案由
+/// 各布局的读取路径给出，与源实现「返回 null → 下游中文报错」同一取向）。
+fn user_data_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
     if let Ok(value) = std::env::var("AUTOCLAW_USER_DATA_DIR") {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            return Some(PathBuf::from(trimmed));
+            dirs.push(PathBuf::from(trimmed));
         }
     }
-    if !cfg!(windows) {
-        return None;
-    }
-    std::env::var("APPDATA")
+    let appdata = std::env::var("APPDATA")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .map(|appdata| appdata.join("AutoClaw"))
-        .or_else(|| Some(home_dir().join("AppData").join("Roaming").join("AutoClaw")))
+        .map(PathBuf::from);
+    let roaming = appdata.unwrap_or_else(|| {
+        home_dir().join("AppData").join("Roaming")
+    });
+    dirs.push(roaming.join("AutoClaw"));
+    dirs.push(roaming.join("AutoClaw-official"));
+    // 去重（大小写不敏感：Windows 路径不区分大小写，环境变量指回同一处时
+    // 不该读两遍），保序 —— 优先级就是出现顺序
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    dirs.retain(|dir| {
+        let key = dir.to_string_lossy().to_lowercase();
+        seen.insert(key)
+    });
+    dirs
 }
 
-/// `auth.json` 路径（导入与状态查询用；非 Windows 上为 None）
-pub fn desktop_auth_file() -> Option<PathBuf> {
-    default_user_data_dir().map(|dir| dir.join("auth.json"))
+/// 老版布局的 `auth.json` 候选清单（每个候选目录一个；导入与状态查询用）
+fn legacy_auth_files() -> Vec<PathBuf> {
+    user_data_dirs()
+        .into_iter()
+        .map(|dir| dir.join("auth.json"))
+        .collect()
 }
 
-/// `Local State` 路径（DPAPI 密钥所在；与 auth.json 同目录）
-fn local_state_file() -> Option<PathBuf> {
-    default_user_data_dir().map(|dir| dir.join("Local State"))
+/// `Local State` 候选清单（每个候选目录一个；`enc:` 粘贴解密按序试）
+fn local_state_files() -> Vec<PathBuf> {
+    user_data_dirs()
+        .into_iter()
+        .map(|dir| dir.join("Local State"))
+        .collect()
 }
 
 /// 网关配置路径（源实现 `gatewayConfigPath`）：
@@ -443,7 +470,13 @@ pub(crate) fn store_cached_if_current(
 
 /// 本地文件来源的「文件仍是刷新前那份」判定（缓存键里带着路径指纹与 mtime）。
 /// 账号来源（`cache_key == None`）没有可比较的文件，返回 `true`。
+///
+/// 缓存键形如 `<来源>:<地区>:<路径指纹>:<mtime>`。桌面端登录态现在有多个
+/// 候选文件（老布局的 auth.json、新布局的 account-credentials.enc），
+/// 判定按**路径指纹**在候选里找同一个文件再比 mtime —— 指纹对不上任何
+/// 候选（用户切换了活动账号、或删了那个文件）都视为「已变化」，拒绝写入。
 fn local_source_unchanged(credentials: &AutoClawCredentials) -> bool {
+    use crate::server::core::providers::refresh_flight::fingerprint;
     let Some(cache_key) = credentials.cache_key.as_deref() else {
         return true;
     };
@@ -453,26 +486,80 @@ fn local_source_unchanged(credentials: &AutoClawCredentials) -> bool {
     let Some(expected_mtime) = stamp.parse::<i64>().ok() else {
         return false;
     };
-    let path = match prefix.split_once(':').map(|(kind, _)| kind) {
-        Some("auth") => match desktop_auth_file() {
-            Some(path) => path,
-            None => return false,
-        },
-        Some("gw") => gateway_config_file(),
+    // prefix = `<来源>:<地区>:<路径指纹>` —— 取来源与指纹两段
+    let Some((kind, region_prefix)) = prefix.split_once(':') else {
+        return false;
+    };
+    let Some((_region, expected_fingerprint)) = region_prefix.split_once(':') else {
+        return false;
+    };
+    let candidates: Vec<PathBuf> = match kind {
+        // 老布局：每个候选目录的 auth.json
+        "auth" => legacy_auth_files(),
+        // 新布局：各候选目录里当前应读的 account-credentials.enc
+        "official" => user_data_dirs()
+            .into_iter()
+            .filter_map(|dir| super::official::credentials_file_in(&dir))
+            .collect(),
+        // 网关配置（单文件，与旧实现同一口径）
+        "gw" => vec![gateway_config_file()],
         _ => return false,
     };
-    match std::fs::symlink_metadata(&path) {
-        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
-            mtime_ms(&meta) == expected_mtime
-        }
-        // 文件被删/换成了非常规文件：没有可确认的原文件 → 拒绝写入
-        _ => false,
-    }
+    candidates.into_iter().any(|path| {
+        fingerprint(&path.to_string_lossy()) == expected_fingerprint
+            && match std::fs::symlink_metadata(&path) {
+                Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
+                    mtime_ms(&meta) == expected_mtime
+                }
+                // 文件被删/换成了非常规文件：没有可确认的原文件 → 拒绝写入
+                _ => false,
+            }
+    })
 }
 
-// ─── 来源 1：auth.json（加密）────────────────────────────────
+// ─── 来源 1：桌面端登录态（老版 auth.json + 新版 official 布局）──
 
-/// 来源 1：从 `auth.json` 解出凭证（源实现 `fromAuthFile`）。
+/// 来源 1 总入口：按候选目录逐个试**两种桌面端布局**，先到先得。
+///
+/// 布局与优先级（候选目录见 [`user_data_dirs`]）：
+///   - 每个目录先试老版 `auth.json`（JSON 里 `enc:` 密文字段），再试新版
+///     official 布局（`accounts/<accountKey>/account-credentials.enc`，见
+///     `official.rs`）—— 官方安装器两个目录都会创建，同一目录里两种布局
+///     不会同时有数据，先后只影响「两者都有」的罕见场景（按老版优先，
+///     保持历史行为）；
+///   - 全部失败时把各候选的失败原因**汇总**成一条错误：用户装的是哪种
+///     客户端只有他自己知道，把找过哪里、各卡在哪说清楚，比只报第一个
+///     目录的「未找到 auth.json」有用得多（旧版正是栽在这里 —— 装了
+///     official 客户端的用户被告知「未找到 auth.json」，可他明明登录着）。
+pub(crate) fn from_auth_file(region: Region) -> Result<AutoClawCredentials, String> {
+    let mut failures: Vec<String> = Vec::new();
+    for dir in user_data_dirs() {
+        match from_legacy_auth_file(&dir, region) {
+            Ok(credentials) => return Ok(credentials),
+            Err(reason) => failures.push(reason),
+        }
+        match from_official_store(&dir, region) {
+            Ok(credentials) => return Ok(credentials),
+            Err(reason) => failures.push(reason),
+        }
+    }
+    // 汇总去重（两个目录可能给出同一句「未找到」，且不相邻 —— dedup() 只去
+    // 相邻重复，这里用集合做保序去重；条目个位数，clone 无所谓）
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    failures.retain(|reason| seen.insert(reason.clone()));
+    let mut joined = failures.join("；");
+    if !cfg!(windows) {
+        joined.push_str("（桌面端登录态解密仅支持 Windows）");
+    }
+    Err(if joined.is_empty() {
+        "AutoClaw 桌面端登录态仅支持 Windows".to_string()
+    } else {
+        format!("未找到可用的 AutoClaw 桌面端登录态：{joined}")
+    })
+}
+
+/// 老版布局：`<dir>/auth.json`（`{deviceId, userInfo, token, refreshToken}`，
+/// `token` / `refreshToken` 形如 `enc:v10:...`）。
 ///
 /// 关键行为（与源实现逐条对齐）：
 ///   - `token` / `refreshToken` 都是**可选**的字符串字段，两者全空时报
@@ -483,10 +570,8 @@ fn local_source_unchanged(credentials: &AutoClawCredentials) -> bool {
 ///   - 解密结果为空 → 「token 解密结果为空」（源实现同款）；
 ///   - `userId` 取 JWT 的 `user_id`，`expiresAt` 取 `exp` × 1000；
 ///   - `deviceId` 优先文件里的 `deviceId`，回落 JWT 的 `device_id`。
-fn from_auth_file(region: Region) -> Result<AutoClawCredentials, String> {
-    let Some(auth_path) = desktop_auth_file() else {
-        return Err("AutoClaw 桌面端登录态仅支持 Windows".to_string());
-    };
+fn from_legacy_auth_file(dir: &Path, region: Region) -> Result<AutoClawCredentials, String> {
+    let auth_path = dir.join("auth.json");
     let snapshot = read_json_file(&auth_path, "AutoClaw auth.json")?;
     // 缓存键带上**来源路径**：`AUTOCLAW_USER_DATA_DIR` 被改过、或换了一台机器上
     // 的同名文件时，mtime 有可能撞上，路径不同就不该复用同一格。
@@ -521,16 +606,10 @@ fn from_auth_file(region: Region) -> Result<AutoClawCredentials, String> {
         return Err("AutoClaw auth.json 中没有 token".to_string());
     }
     let mut key_error: Option<String> = None;
-    let aes_key = match local_state_file() {
-        Some(local_state) => match crypto::os_crypt_aes_key(&local_state) {
-            Ok(key) => Some(key),
-            Err(reason) => {
-                key_error = Some(reason);
-                None
-            }
-        },
-        None => {
-            key_error = Some("AutoClaw 桌面端登录态仅支持 Windows".to_string());
+    let aes_key = match crypto::os_crypt_aes_key(&dir.join("Local State")) {
+        Ok(key) => Some(key),
+        Err(reason) => {
+            key_error = Some(reason);
             None
         }
     };
@@ -570,6 +649,63 @@ fn from_auth_file(region: Region) -> Result<AutoClawCredentials, String> {
         .trim()
         .to_string();
     // 解密结果进缓存：下一次同一 mtime 的请求不再做 DPAPI + AES-GCM
+    store_cached(region, &cache_key, &credentials);
+    Ok(credentials)
+}
+
+/// 新版 official 布局：`<dir>/accounts/<accountKey>/account-credentials.enc`
+/// （裸 os_crypt blob，整份 JSON 加密），详见 `official.rs` 模块头。
+///
+/// 缓存键的构成与老布局同构（`official:<地区>:<路径指纹>:<mtime>`），但
+/// **解析在缓存命中判定之后**：先只解析「该读哪个文件」（读目录 + 活动账号
+/// 标记，不碰加密），命中缓存就直接返回 —— DPAPI + AES-GCM 那一下才是这层
+/// 缓存要省掉的大头，不能每次请求都先解一遍。
+fn from_official_store(dir: &Path, region: Region) -> Result<AutoClawCredentials, String> {
+    let Some(credentials_file) = super::official::credentials_file_in(dir) else {
+        return Err(super::official::not_found_message(dir));
+    };
+    let modified_at = std::fs::symlink_metadata(&credentials_file)
+        .ok()
+        .map(|meta| mtime_ms(&meta))
+        .unwrap_or(0);
+    let cache_key = format!(
+        "official:{}:{}:{}",
+        region.provider_id(),
+        crate::server::core::providers::refresh_flight::fingerprint(
+            &credentials_file.to_string_lossy()
+        ),
+        modified_at
+    );
+    if let Some(cached) = lookup_cached(region, &cache_key) {
+        return Ok(cached);
+    }
+    let login = super::official::read_login(dir)?;
+    // 缓存键按**实际读到的那份文件**重算：上面的定位与这里的读取之间，
+    // 用户可能在客户端切换了活动账号（active-product-account.json 变了），
+    // 两次解析会指向不同文件 —— 缓存必须记真正解密的那份，否则下一次
+    // 命中缓存拿到的是已被换掉的账号。
+    let cache_key = format!(
+        "official:{}:{}:{}",
+        region.provider_id(),
+        crate::server::core::providers::refresh_flight::fingerprint(
+            &login.credentials_file.to_string_lossy()
+        ),
+        login.modified_at
+    );
+    let claims = crypto::decode_jwt_claims(&login.token);
+    let mut credentials = credentials_from_claims(
+        DESKTOP_ACCOUNT_ID.to_string(),
+        region,
+        login.token,
+        login.refresh_token,
+        login.device_id,
+        claims.as_ref(),
+        CredentialOrigin::DesktopAuthFile,
+        Some(cache_key.clone()),
+    );
+    // 邮箱在新布局里来自账号旁边的 account-profile.json（明文），
+    // 由 read_login 一并带出
+    credentials.email = login.email;
     store_cached(region, &cache_key, &credentials);
     Ok(credentials)
 }
@@ -832,10 +968,25 @@ pub fn credentials_from_record(
     }
     let needs_decrypt = raw_token.starts_with("enc:") || raw_refresh.starts_with("enc:");
     let aes_key = if needs_decrypt {
-        let key = local_state_file()
-            .ok_or_else(|| GatewayError::with_status(401, "AutoClaw 加密凭证仅支持 Windows"))?;
-        let key = crypto::os_crypt_aes_key(&key).map_err(|reason| {
-            GatewayError::with_status(401, format!("AutoClaw 加密凭证解密失败：{reason}"))
+        // 密钥按候选目录逐个试（老版 `AutoClaw` 与新版 `AutoClaw-official`
+        // 各有一份 Local State）：粘贴的密文来自哪个客户端装的哪一版，
+        // 这里无从判断 —— 哪份 Local State 能解开就用哪份，全部失败才报错
+        let mut resolved: Option<Vec<u8>> = None;
+        let mut last_error = "AutoClaw 加密凭证仅支持 Windows".to_string();
+        for local_state in local_state_files() {
+            match crypto::os_crypt_aes_key(&local_state) {
+                Ok(key) => {
+                    resolved = Some(key);
+                    break;
+                }
+                Err(reason) => last_error = reason,
+            }
+        }
+        let key = resolved.ok_or_else(|| {
+            GatewayError::with_status(
+                401,
+                format!("AutoClaw 加密凭证解密失败：{last_error}"),
+            )
         })?;
         Some(key)
     } else {
