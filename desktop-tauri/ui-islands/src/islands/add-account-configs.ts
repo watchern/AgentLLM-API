@@ -480,9 +480,11 @@ const CODEARTS: ProviderConfig = {
 const TRAE: ProviderConfig = {
   provider: 'trae',
   label: 'Trae',
-  // Trae 桌面端的登录态在它自己的加密存储里（与 Accio / ZCode 同一处境），
-  // 没有 auth.json 那种稳定可读的形态 —— 给了入口只会稳定失败。
-  desktop: false,
+  // 桌面端登录态在 `%APPDATA%\Trae CN\User\globalStorage\storage.json` 的
+  // iCubeAuthInfo（「tc」加密块，salt 硬编码在客户端里，可离线解开）——
+  // 见后端 `providers::trae::desktop`。
+  desktop: true,
+  desktopNote: t('读取本机 Trae 客户端（Trae CN）当前登录的账号并直接加入列表。'),
   webLogin: {
     noteHtml: t('打开 <b>Trae SOLO</b> 的官方授权页（<code>trae.cn</code>）并用你的 Trae 账号登录：授权完成后官方页面会跳回<b>本机</b>的一个临时端口；同机部署自动接收，Docker / 远程面板请按提示复制地址栏回调地址。'),
     button: t('打开 Trae 授权页'),

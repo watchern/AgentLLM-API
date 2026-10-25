@@ -32,6 +32,7 @@ pub mod adapter;
 pub mod callback_server;
 pub mod checkin;
 pub mod credentials;
+pub mod desktop;
 pub mod device;
 pub mod errors;
 pub mod forward;

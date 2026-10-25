@@ -842,9 +842,11 @@ pub async fn add_account(state: &ServerState, body: &Bytes) -> Response {
             };
             store.add_zcode_account(&credentials, import_name, "manual")
         }
-        // Trae：**粘贴凭据**（`accessToken` / `refreshToken` / 设备三件套）→ 手动添加。
-        // 「网页登录」是另一条链路（`api::session::login_start` 的 Trae 分支 →
-        // `core::login::trae` 的回调任务 → 同一个落账号入口 `add_trae_account`）。
+        // Trae：**粘贴凭据**（`accessToken` / `refreshToken` / 设备三件套）→ 手动添加；
+        // `importDesktop: true` → 读本机 Trae 客户端的加密登录态（`storage.json` 的
+        // iCubeAuthInfo，「tc」块，见 `providers::trae::desktop`）。「网页登录」是
+        // 另一条链路（`api::session::login_start` 的 Trae 分支 → `core::login::trae`
+        // 的回调任务 → 同一个落账号入口 `add_trae_account`）。
         //
         // ── 形状判定为什么交给 `Credential::from_payload` ────────
         // 参考实现的落盘形态是嵌套的 `{type, provider, auth{…}, account{…}}`
@@ -852,15 +854,29 @@ pub async fn add_account(state: &ServerState, body: &Bytes) -> Response {
         // 只认平铺会让「从 CPA 导出粘贴过来」变成一句"缺 accessToken"，而那份
         // 数据明明是完整的。它同时**拒绝**别家的蛇形键（`access_key_id` 一类），
         // 免得一条有内容的记录被当成空凭据收下。
-        //
-        // `importDesktop` 不提供：Trae 桌面端的登录态在它自己的加密存储里
-        // （与 Accio / ZCode 同一处境），给了入口只会稳定失败。
         Some(crate::server::core::providers::ProviderKind::Trae) => {
             if import_desktop {
-                return management_error(
-                    400,
-                    "Trae 不支持导入桌面端登录态，请用「网页登录」或粘贴凭证添加账号",
-                );
+                let credential =
+                    match crate::server::core::providers::trae::desktop::local_credential() {
+                        Ok(credential) => credential,
+                        Err(reason) => return management_error(400, reason),
+                    };
+                return match store.add_trae_account(&credential, import_name, "import") {
+                    Ok(account) => {
+                        logging::log(
+                            "[Accounts]",
+                            &format!(
+                                "📥 已从 Trae 客户端导入登录态（{}）",
+                                account.get("name").and_then(Value::as_str).unwrap_or("")
+                            ),
+                        );
+                        ok_json(json!({
+                            "account": account,
+                            "list": store.list_accounts(),
+                        }))
+                    }
+                    Err(error) => store_error(error),
+                };
             }
             let mut credential =
                 match crate::server::core::providers::trae::credentials::Credential::from_payload(&payload) {
