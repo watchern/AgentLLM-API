@@ -127,8 +127,10 @@ bcrypt = "0.15"
 # （to_luma8 转灰度后 detect_grids），不新增图片解码栈。
 rqrr = "0.11"
 
-# AutoClaw 凭证解密的 DPAPI（providers/autoclaw/crypto.rs）。仅 Windows
-# 目标生效；其它平台该适配器的「导入桌面端登录态」是桩实现。
+# AutoClaw 凭证解密的 DPAPI（providers/autoclaw/crypto.rs）与 WorkBuddy
+# at-rest 密钥发现（providers/workbuddy/at_rest.rs：DPAPI blob 扫描 +
+# 运行中客户端进程内存扫描）。仅 Windows 目标生效；其它平台这两个适配器的
+# 「导入桌面端登录态」是桩实现。
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
     "Win32_Security_Cryptography",
@@ -136,6 +138,14 @@ windows = { version = "0.61", features = [
     # 枚举注册表卸载项定位客户端安装目录
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
+    # WorkBuddy at-rest 密钥发现（at_rest.rs 的进程内存扫描）：
+    # ToolHelp 枚举进程、Threading 开进程句柄、Memory 走内存段、
+    # Debug 的 ReadProcessMemory 读内容、Foundation 是前几者的公共类型
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Threading",
+    "Win32_System_Memory",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_Foundation",
 ] }
 # Windows 服务形态（bin/service.rs）：`--service` 参数下把进程交给 SCM
 # （StartServiceCtrlDispatcherW + 控制事件回调 + 状态上报）。

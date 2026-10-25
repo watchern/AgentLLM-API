@@ -28,6 +28,7 @@
 //! 照抄的范本。
 
 pub mod adapter;
+pub mod at_rest;
 pub mod growth;
 pub mod keepalive;
 pub mod normalize;

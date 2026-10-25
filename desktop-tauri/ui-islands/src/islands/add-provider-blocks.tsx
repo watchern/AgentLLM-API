@@ -1008,7 +1008,7 @@ function WorkBuddyDesktopImportSection({
   return (
     <DialogSection hidden={!visible}>
       <h3>{t('从本机导入桌面端登录态')}</h3>
-      <Note text={t('读本机官方客户端（Tencent WorkBuddy / WorkBuddy AI）当前登录的账号：自动定位其凭证目录里最新的登录态文件（需已在本机官方客户端登录）。导入后由网关自动续期，无需跟随 2 小时时效手动换令牌。')} />
+      <Note text={t('读本机官方客户端（Tencent WorkBuddy / WorkBuddy AI）当前登录的账号：自动定位其凭证目录里最新的登录态文件（需已在本机官方客户端登录）。5.6.2 及以上版本的客户端把登录态加密存储，导入时需要客户端正在运行（解密密钥只驻留客户端进程内存）；未运行时会提示失败原因，启动客户端后重试即可。导入后由网关自动续期，无需跟随 2 小时时效手动换令牌。')} />
       <div className='field-row'>
         <Button onClick={() => void importFromDesktop()} disabled={busy}>
           {busy ? t('导入中…') : t('从本机导入桌面端登录态')}
