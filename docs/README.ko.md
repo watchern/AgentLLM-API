@@ -230,22 +230,22 @@ services:
 ### 요구 사항
 
 - Rust >= 1.77 와 Tauri 2 도구 체인(데스크톱 앱 본체 컴파일용. Windows 에서는 WebView2 런타임도 필요)
-- Node.js >= 18.17(`npm run tauri:*` 과 프런트엔드 빌드 스크립트 실행용. 데스크톱 앱은 실행 시 Node 에 의존하지 않습니다)
+- Node.js >= 18.17 + pnpm(의존성은 pnpm 워크스페이스로 관리되며, 단일 `pnpm-lock.yaml` 이 리포지토리 루트에 있습니다. 버전은 루트 `package.json` 의 `packageManager` 필드로 고정되고 corepack 이 해당 버전을 자동으로 설치합니다. 데스크톱 앱은 실행 시 Node 에 의존하지 않습니다)
 - 대상 플랫폼: Windows / macOS / Linux 데스크톱(플랫폼별 bundle: Windows NSIS, macOS app+dmg, Linux deb+AppImage)과 Docker 서버
 
 ### 자주 쓰는 스크립트
 
 ```bash
-npm run tauri:install      # 데스크톱 의존성 설치(npm --prefix desktop-tauri install 과 동일)
-npm run tauri:dev          # 개발 모드로 데스크톱 앱 실행(핫 리로드 포함)
-npm run tauri:build        # 데스크톱 설치 프로그램 빌드
+pnpm install               # 워크스페이스 전체 의존성 설치(desktop-tauri 와 ui-kit / ui-islands / i18n)
+pnpm tauri:dev             # 개발 모드로 데스크톱 앱 실행(핫 리로드 포함)
+pnpm tauri:build           # 데스크톱 설치 프로그램 빌드
 
-npm run build:icon         # 아이콘 소스 이미지 생성(아이콘 디자인을 바꾼 뒤 실행하고, 이어서 tauri icon 실행)
+pnpm build:icon            # 아이콘 소스 이미지 생성(아이콘 디자인을 바꾼 뒤 실행하고, 이어서 tauri icon 실행)
 ```
 
 패키징 산출물은 `target/release/bundle/nsis/Agent2API_<버전>_x64-setup.exe`(3.0 기준 약 8.6 MB. `src-tauri/.cargo/config.toml` 이 cargo 의 `target-dir` 을 프로젝트 루트의 `target/` 으로 지정합니다).
 
-macOS 의 `.dmg` 는 **macOS 에서만 빌드할 수 있습니다**(`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`). Windows 에서 크로스 컴파일할 수 없어 공식 산출물은 CI 의 `build` 워크플로(macos-latest 에서 두 타깃을 병합)가 만듭니다. Linux 데스크톱 패키지는 같은 워크플로의 `linux-desktop` job 이 만들고(deb + AppImage), Docker 이미지와 컨테이너 내 업데이트에 쓰는 서버 패키지는 `linux-server` job 이 만듭니다. 후자는 Dockerfile 의 컴파일 경로를 재사용하므로 패키지 안의 실행 파일이 이미지와 동일한 도구 체인의 산출물입니다.
+macOS 의 `.dmg` 는 **macOS 에서만 빌드할 수 있습니다**(`pnpm -C desktop-tauri run build -- --target universal-apple-darwin`). Windows 에서 크로스 컴파일할 수 없어 공식 산출물은 CI 의 `build` 워크플로(macos-latest 에서 두 타깃을 병합)가 만듭니다. Linux 데스크톱 패키지는 같은 워크플로의 `linux-desktop` job 이 만들고(deb + AppImage), Docker 이미지와 컨테이너 내 업데이트에 쓰는 서버 패키지는 `linux-server` job 이 만듭니다. 후자는 Dockerfile 의 컴파일 경로를 재사용하므로 패키지 안의 실행 파일이 이미지와 동일한 도구 체인의 산출물입니다.
 
 ## 📜 사용 고지
 

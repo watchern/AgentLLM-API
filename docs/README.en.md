@@ -231,22 +231,22 @@ Trends: 24-hour **cache hit rate** (line) and **token consumption** (area) on tw
 ### Requirements
 
 - Rust >= 1.77 and the Tauri 2 toolchain (to compile the desktop app itself; Windows also needs the WebView2 runtime)
-- Node.js >= 18.17 (only to run `npm run tauri:*` and frontend build scripts; the desktop app does not depend on Node at runtime)
+- Node.js >= 18.17 + pnpm (dependencies are managed as a pnpm workspace with a single `pnpm-lock.yaml` at the repo root; the version is pinned by the `packageManager` field in the root `package.json` and installed automatically via corepack. The desktop app does not depend on Node at runtime)
 - Target platforms: Windows and macOS desktops, plus a Docker server (**there is no Linux desktop app**: the Tauri bundle only configures Windows NSIS and macOS app/dmg)
 
 ### Common scripts
 
 ```bash
-npm run tauri:install      # Install desktop dependencies (same as npm --prefix desktop-tauri install)
-npm run tauri:dev          # Launch the desktop app in dev mode (with hot reload)
-npm run tauri:build        # Build the desktop installer
+pnpm install               # Install all workspace dependencies (desktop-tauri plus ui-kit / ui-islands / i18n)
+pnpm tauri:dev             # Launch the desktop app in dev mode (with hot reload)
+pnpm tauri:build           # Build the desktop installer
 
-npm run build:icon         # Generate the icon source image (run after changing the icon design, then run tauri icon)
+pnpm build:icon            # Generate the icon source image (run after changing the icon design, then run tauri icon)
 ```
 
 The build artifact is `target/release/bundle/nsis/Agent2API_<version>_x64-setup.exe` (about 8.6 MB as of 3.0; `src-tauri/.cargo/config.toml` points cargo's `target-dir` at the project root's `target/`).
 
-The macOS `.dmg` **can only be built on macOS** (`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`) — it cannot be cross-compiled from Windows, so the official artifact comes from the CI `build` workflow (`macos-latest`, two targets merged). Docker images and the server archives used for in-container updates come from the same workflow's `linux-server` job, which reuses the Dockerfile's compile path so the executable inside is built from the same toolchain as the image.
+The macOS `.dmg` **can only be built on macOS** (`pnpm -C desktop-tauri run build -- --target universal-apple-darwin`) — it cannot be cross-compiled from Windows, so the official artifact comes from the CI `build` workflow (`macos-latest`, two targets merged). Docker images and the server archives used for in-container updates come from the same workflow's `linux-server` job, which reuses the Dockerfile's compile path so the executable inside is built from the same toolchain as the image.
 
 ## 📜 Usage Notice
 

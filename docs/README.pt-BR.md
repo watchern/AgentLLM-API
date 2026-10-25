@@ -230,22 +230,22 @@ Tendências: **taxa de acerto de cache** (linha) e **consumo de tokens** (área)
 ### Requisitos
 
 - Rust >= 1.77 e o toolchain do Tauri 2 (para compilar o app desktop; no Windows também é preciso o runtime WebView2)
-- Node.js >= 18.17 (apenas para rodar `npm run tauri:*` e scripts de build do frontend; o app desktop não depende de Node em tempo de execução)
+- Node.js >= 18.17 + pnpm (as dependências são gerenciadas num workspace pnpm, com um único `pnpm-lock.yaml` na raiz do repositório; a versão é fixada pelo campo `packageManager` do `package.json` da raiz e instalada automaticamente via corepack. O app desktop não depende de Node em tempo de execução)
 - Plataformas alvo: desktops Windows / macOS / Linux (bundles por plataforma: NSIS no Windows, app+dmg no macOS, deb+AppImage no Linux) e servidor Docker
 
 ### Scripts comuns
 
 ```bash
-npm run tauri:install      # Instala as dependências do desktop (equivalente a npm --prefix desktop-tauri install)
-npm run tauri:dev          # Abre o app desktop em modo de desenvolvimento (com hot reload)
-npm run tauri:build        # Compila o instalador do desktop
+pnpm install               # Instala as dependências de todo o workspace (desktop-tauri e ui-kit / ui-islands / i18n)
+pnpm tauri:dev             # Abre o app desktop em modo de desenvolvimento (com hot reload)
+pnpm tauri:build           # Compila o instalador do desktop
 
-npm run build:icon         # Gera a imagem-fonte do ícone (rode após mudar o design do ícone e depois rode tauri icon)
+pnpm build:icon            # Gera a imagem-fonte do ícone (rode após mudar o design do ícone e depois rode tauri icon)
 ```
 
 O artefato de build é `target/release/bundle/nsis/Agent2API_<versão>_x64-setup.exe` (cerca de 8,6 MB na 3.0; o `src-tauri/.cargo/config.toml` aponta o `target-dir` do cargo para o `target/` na raiz do projeto).
 
-O `.dmg` do macOS **só pode ser compilado no macOS** (`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`) — não há compilação cruzada a partir do Windows, então o artefato oficial sai do workflow `build` da CI (`macos-latest`, dois alvos mesclados). Os pacotes do desktop Linux saem do job `linux-desktop` do mesmo workflow (deb + AppImage); as imagens Docker e os pacotes de servidor usados na atualização dentro do contêiner saem do job `linux-server`, que reaproveita o caminho de compilação do Dockerfile, de modo que o executável dentro do pacote vem da mesma toolchain da imagem.
+O `.dmg` do macOS **só pode ser compilado no macOS** (`pnpm -C desktop-tauri run build -- --target universal-apple-darwin`) — não há compilação cruzada a partir do Windows, então o artefato oficial sai do workflow `build` da CI (`macos-latest`, dois alvos mesclados). Os pacotes do desktop Linux saem do job `linux-desktop` do mesmo workflow (deb + AppImage); as imagens Docker e os pacotes de servidor usados na atualização dentro do contêiner saem do job `linux-server`, que reaproveita o caminho de compilação do Dockerfile, de modo que o executável dentro do pacote vem da mesma toolchain da imagem.
 
 ## 📜 Aviso de uso
 

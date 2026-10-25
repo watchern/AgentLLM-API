@@ -230,22 +230,22 @@ services:
 ### 動作環境
 
 - Rust >= 1.77 と Tauri 2 ツールチェーン（デスクトップアプリ本体のコンパイル用。Windows では WebView2 ランタイムも必要）
-- Node.js >= 18.17（`npm run tauri:*` とフロントエンドのビルドスクリプトの実行のみ。デスクトップアプリは実行時に Node へ依存しません）
+- Node.js >= 18.17 + pnpm（依存関係は pnpm ワークスペースで管理され、単一の `pnpm-lock.yaml` がリポジトリルートに置かれます。バージョンはルート `package.json` の `packageManager` フィールドで固定され、corepack が自動的に対応バージョンをインストールします。デスクトップアプリは実行時に Node へ依存しません）
 - 対象プラットフォーム: Windows / macOS / Linux のデスクトップ（各プラットフォームの bundle: Windows NSIS、macOS app+dmg、Linux deb+AppImage）と Docker のサーバー
 
 ### よく使うスクリプト
 
 ```bash
-npm run tauri:install      # デスクトップの依存関係をインストール（npm --prefix desktop-tauri install と同等）
-npm run tauri:dev          # 開発モードでデスクトップアプリを起動（ホットリロード付き）
-npm run tauri:build        # デスクトップのインストーラーをビルド
+pnpm install               # ワークスペース全体の依存関係をインストール（desktop-tauri と ui-kit / ui-islands / i18n）
+pnpm tauri:dev             # 開発モードでデスクトップアプリを起動（ホットリロード付き）
+pnpm tauri:build           # デスクトップのインストーラーをビルド
 
-npm run build:icon         # アイコンのソース画像を生成（アイコン設計を変えた後に実行し、続けて tauri icon を実行）
+pnpm build:icon            # アイコンのソース画像を生成（アイコン設計を変えた後に実行し、続けて tauri icon を実行）
 ```
 
 パッケージ成果物は `target/release/bundle/nsis/Agent2API_<バージョン>_x64-setup.exe`（3.0 時点でおよそ 8.6 MB。`src-tauri/.cargo/config.toml` が cargo の `target-dir` をプロジェクトルートの `target/` に指定しています）。
 
-macOS の `.dmg` は **macOS 上でしかビルドできません**（`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`）。Windows からのクロスコンパイルは不可のため、公式成果物は CI の `build` ワークフロー（`macos-latest` で 2 ターゲットを統合）が生成します。Linux デスクトップのパッケージは同じワークフローの `linux-desktop` job が生成し（deb + AppImage）、Docker イメージとコンテナ内更新に使うサーバーパッケージは `linux-server` job が生成します。後者は Dockerfile のコンパイル経路を再利用するため、パッケージ内の実行ファイルはイメージと同一ツールチェーンの成果物になります。
+macOS の `.dmg` は **macOS 上でしかビルドできません**（`pnpm -C desktop-tauri run build -- --target universal-apple-darwin`）。Windows からのクロスコンパイルは不可のため、公式成果物は CI の `build` ワークフロー（`macos-latest` で 2 ターゲットを統合）が生成します。Linux デスクトップのパッケージは同じワークフローの `linux-desktop` job が生成し（deb + AppImage）、Docker イメージとコンテナ内更新に使うサーバーパッケージは `linux-server` job が生成します。後者は Dockerfile のコンパイル経路を再利用するため、パッケージ内の実行ファイルはイメージと同一ツールチェーンの成果物になります。
 
 ## 📜 使用に関する告知
 

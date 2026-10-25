@@ -41,15 +41,15 @@ name: build
 #   · checkout v6 把凭据挪到单独文件、v7 阻止 workflow_run 检出 fork PR
 #     —— 本工作流是 workflow_dispatch，不涉及；
 #   · setup-node v5 起会对有 packageManager 字段的项目**自动开启缓存**，
-#     本项目两个 package.json 都没有那个字段，行为不变（见下面显式 cache 说明）；
+#     本项目根 package.json 已声明 `pnpm@11.28.8`，配合显式 cache: pnpm
+#     双保险（见下面各 job 的说明）；
 #   · upload-artifact v7 新增的 archive:false 直传与 ESM 化都是增量能力，
 #     name + path 的用法逐字不变。
 #
-# ── npm 缓存（本次一并加上）───────────────────────────────────
-# 原先只缓存了 Rust 依赖，npm 每次都全量下载。setup-node 的 cache 选项
-# 需要显式指定 cache-dependency-path：本项目的依赖装在 desktop-tauri/ 下，
-# 而根 package.json 没有依赖，指错路径会让缓存 key 永远命中不了
-# （甚至因为找不到 lock 文件而直接报错）。
+# ── pnpm 缓存（依赖管理已从 npm 迁到 pnpm）─────────────────────
+# 依赖装在 pnpm 工作区里，单一 lockfile（pnpm-lock.yaml）在仓库根，
+# setup-node 的 cache 因此指 pnpm + 根 lockfile。pnpm 本体由
+# pnpm/action-setup 装，版本读 packageManager 字段（不在这里另钉一份）。
 #
 # ── 签名 ──────────────────────────────────────────────────────
 # 默认**不签名**（ad-hoc）。macOS 上未签名的应用 Gatekeeper 会拦下，
@@ -78,13 +78,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: 安装 pnpm
+        # 版本读根 package.json 的 packageManager 字段，不在这里重复钉
+        uses: pnpm/action-setup@v4
+
       - name: 安装 Node
         uses: actions/setup-node@v7
         with:
           node-version: '22'
-          # 依赖在 desktop-tauri/ 下（根 package.json 没有依赖），必须显式指路
-          cache: npm
-          cache-dependency-path: desktop-tauri/package-lock.json
+          # pnpm 工作区：单一 lockfile 在仓库根
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
@@ -101,13 +105,13 @@ jobs:
           workspaces: desktop-tauri/src-tauri -> ../../target
 
       - name: 安装桌面端依赖
-        run: npm --prefix desktop-tauri ci
+        run: pnpm install --frozen-lockfile
 
       # 不走 tauri-action：它的默认脚本是 `npm run tauri build`，而本项目的
       # package.json 里那条脚本叫 `build`（见 desktop-tauri/package.json）。
       # 直接用 CLI 更直白，也少一层 action 的版本耦合。
       - name: 构建 macOS 安装包
-        run: npm --prefix desktop-tauri run build -- --target universal-apple-darwin
+        run: pnpm -C desktop-tauri run build -- --target universal-apple-darwin
 
       - name: 上传产物
         uses: actions/upload-artifact@v7
@@ -124,13 +128,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
       - name: 安装 Node
         uses: actions/setup-node@v7
         with:
           node-version: '22'
-          # 同 macOS job：依赖在 desktop-tauri/ 下
-          cache: npm
-          cache-dependency-path: desktop-tauri/package-lock.json
+          # 同 macOS job：pnpm 工作区，单一 lockfile 在仓库根
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
@@ -141,10 +148,10 @@ jobs:
           workspaces: desktop-tauri/src-tauri -> ../../target
 
       - name: 安装桌面端依赖
-        run: npm --prefix desktop-tauri ci
+        run: pnpm install --frozen-lockfile
 
       - name: 构建 Windows 安装包
-        run: npm --prefix desktop-tauri run build
+        run: pnpm -C desktop-tauri run build
 
       - name: 上传产物
         uses: actions/upload-artifact@v7
@@ -175,13 +182,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
       - name: 安装 Node
         uses: actions/setup-node@v7
         with:
           node-version: '22'
-          # 依赖在 desktop-tauri/ 下（根 package.json 没有依赖），必须显式指路
-          cache: npm
-          cache-dependency-path: desktop-tauri/package-lock.json
+          # 同 macOS job：pnpm 工作区，单一 lockfile 在仓库根
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
@@ -213,12 +223,12 @@ jobs:
           pkg-config --modversion webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1
 
       - name: 安装桌面端依赖
-        run: npm --prefix desktop-tauri ci
+        run: pnpm install --frozen-lockfile
 
       # 不走 tauri-action：它的默认脚本是 `npm run tauri build`，而本项目的
       # package.json 里那条脚本叫 `build`（同 macOS job 的说明）。
       - name: 构建 Linux 桌面端安装包
-        run: npm --prefix desktop-tauri run build -- --config src-tauri/tauri.linux.conf.json
+        run: pnpm -C desktop-tauri run build -- --config src-tauri/tauri.linux.conf.json
 
       - name: 上传产物
         uses: actions/upload-artifact@v7

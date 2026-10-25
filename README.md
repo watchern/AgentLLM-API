@@ -354,22 +354,22 @@ services:
 ### 环境要求
 
 - Rust >= 1.77 与 Tauri 2 工具链（编译桌面端本体；Windows 上还需 WebView2 运行时）
-- Node.js >= 18.17（只用于 `npm run tauri:*` 与前端构建脚本，桌面端运行时不依赖 Node）
+- Node.js >= 18.17 + pnpm（依赖管理用 pnpm 工作区，单一 `pnpm-lock.yaml` 在仓库根；版本由根 `package.json` 的 `packageManager` 字段钉住，corepack 会自动装对应版本。桌面端运行时不依赖 Node）
 - 目标平台：Windows / macOS / Linux 桌面端、Windows / Linux 服务端（无 GUI）、Docker 服务端
 
 ### 常用脚本
 
 ```bash
-npm run tauri:install      # 安装桌面端依赖（等价 npm --prefix desktop-tauri install）
-npm run tauri:dev          # 开发模式调起桌面端（自动热重载）
-npm run tauri:build        # 构建桌面端安装包
+pnpm install               # 安装全部工作区依赖（desktop-tauri 与 ui-kit / ui-islands / i18n）
+pnpm tauri:dev             # 开发模式调起桌面端（自动热重载）
+pnpm tauri:build           # 构建桌面端安装包
 
-npm run build:icon         # 生成图标源图（改图标设计后执行，再跑 tauri icon）
+pnpm build:icon            # 生成图标源图（改图标设计后执行，再跑 tauri icon）
 ```
 
 打包产物为 `target/release/bundle/nsis/Agent2API_<版本>_x64-setup.exe`（3.0 版约 8.6 MB；`src-tauri/.cargo/config.toml` 把 cargo 的 `target-dir` 指到了项目根的 `target/`）。
 
-macOS 的 `.dmg` **只能在 macOS 上构建**（`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`），无法从 Windows 交叉编译，所以正式产物由 CI 的 `build` 工作流产（`macos-latest` + 双目标合并）；Docker 镜像与容器内更新用的服务端包由同一工作流的 `linux-server` job 出（复用 Dockerfile 的编译路径，包内可执行文件与镜像同源同工具链）。
+macOS 的 `.dmg` **只能在 macOS 上构建**（`pnpm -C desktop-tauri run build -- --target universal-apple-darwin`），无法从 Windows 交叉编译，所以正式产物由 CI 的 `build` 工作流产（`macos-latest` + 双目标合并）；Docker 镜像与容器内更新用的服务端包由同一工作流的 `linux-server` job 出（复用 Dockerfile 的编译路径，包内可执行文件与镜像同源同工具链）。
 
 ## 📜 使用声明
 

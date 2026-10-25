@@ -1,0 +1,16 @@
+# pnpm workspace（依赖管理从 npm 迁到 pnpm，单一 lockfile 在仓库根）
+#
+# 成员即各前端子项目；仓库根 package.json 本身默认是工作区的一员
+# （只有脚本、没有依赖）。ui-islands 对 ui-kit 的消费走 vite/tsconfig 的
+# `@ui` 路径别名（见 ui-islands/vite.config.ts），不走包解析，因此这里
+# 不需要 workspace: 协议的相互依赖。
+packages:
+  - desktop-tauri
+  - desktop-tauri/ui-kit
+  - desktop-tauri/ui-islands
+  - desktop-tauri/i18n
+
+# pnpm 10+ 默认拦截依赖的 postinstall 脚本；下面放行的是确有构建脚本的：
+#   esbuild —— 安装期校验/回填平台二进制（vite 的传递依赖）
+onlyBuiltDependencies:
+  - esbuild
