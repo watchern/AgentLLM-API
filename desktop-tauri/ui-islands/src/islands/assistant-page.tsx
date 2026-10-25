@@ -218,31 +218,36 @@ function AssistantPage() {
     if (near) el.scrollTop = el.scrollHeight
   }, [ui])
 
-  /* 数据加载：配置 + 模型清单（activate 时触发；重复调用只加载一次）
+  /* 数据加载：配置一次 + 模型清单每次唤起都刷新
    *
    * 两件事**各自独立**，刻意不放进同一个 try：配置走的是直连 HTTP
    * （`/api/assistant/config`），模型清单走的是壳的桥 —— 后端的助手接口缺失
    * 或版本偏旧时，不该把「模型选择器」一起打成空的（那会让用户以为
    * 「我一个启用的模型都没有」，把两件事混成一件去排查）。
    *
-   * 配置失败还会**自动重试**（有限次）：dev 刚启动时窗口可能比网关的 HTTP
-   * 监听先就绪，那一刻的失败只代表「还早」，不代表「坏了」。 */
+   * 配置只在首次唤起加载（失败还会**自动重试**有限次：dev 刚启动时窗口可能
+   * 比网关的 HTTP 监听先就绪，那一刻的失败只代表「还早」，不代表「坏了」）；
+   * 模型清单**每次**切到助手页都重取 —— 用户在账号页加了账号、或模型管理页
+   * 刷新过目录之后，启用的模型集合可能变了，回到助手页选择器要跟上。
+   * `wbAssistant.activate` 由壳在每次切页时调用（见 app.js 的切页钩子），
+   * 这里是模型列表「自动更新」的挂点；刷新走的是本地桥，代价可忽略。 */
   const activate = React.useCallback(async () => {
-    if (loadedRef.current) return
-    loadedRef.current = true
-    // ① 助手配置（对话模型 / 系统提示词 / 工具勾选）
-    try {
-      const next = await loadAssistantConfig()
-      setConfig(next)
-      setLoadingFailed(false)
-      retryRef.current = 0
-    } catch (error) {
-      setLoadingFailed(true)
-      setStatus(t('加载助手设置失败：{message}', { message: errorText(error) }))
-      if (retryRef.current < 3) {
-        retryRef.current += 1
-        loadedRef.current = false
-        setTimeout(() => { void activate() }, 4000)
+    if (!loadedRef.current) {
+      loadedRef.current = true
+      // ① 助手配置（对话模型 / 系统提示词 / 工具勾选）
+      try {
+        const next = await loadAssistantConfig()
+        setConfig(next)
+        setLoadingFailed(false)
+        retryRef.current = 0
+      } catch (error) {
+        setLoadingFailed(true)
+        setStatus(t('加载助手设置失败：{message}', { message: errorText(error) }))
+        if (retryRef.current < 3) {
+          retryRef.current += 1
+          loadedRef.current = false
+          setTimeout(() => { void activate() }, 4000)
+        }
       }
     }
     // ② 模型清单（助手自己只能选「可请求的名字」：启用的模型 ID + 启用的映射名）

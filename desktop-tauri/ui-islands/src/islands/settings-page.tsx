@@ -2231,9 +2231,11 @@ function SettingsPage() {
         </div>
         {/* AI 助手：三块面板（对话模型 / 系统提示词 / 工具勾选）。它自带一份独立的
             加载与保存（/api/assistant/config），不经过 settings-state 的快照 —— 见
-            assistant-settings-pane.tsx 的模块头 */}
+            assistant-settings-pane.tsx 的模块头。active 供模型清单的切类自动刷新：
+            设置面板常驻挂载（CSS 显隐），配置那段 effect 一生只跑一次，靠这个
+            翻转感知「用户回到了 AI 助手分类」（见 pane 内 refreshModels 的说明） */}
         <div className={paneClass('assistant')} data-cat='assistant'>
-          <AssistantSettingsPane />
+          <AssistantSettingsPane active={snap.category === 'assistant'} />
         </div>
         <div className={paneClass('display')} data-cat='display'>
           <DisplayPane />

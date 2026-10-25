@@ -4,6 +4,7 @@
   "助手设置没读出来，暂时存不了对话模型 —— 看输入框下方的提示。": "Assistant settings could not be read, so the chat model can't be saved yet — see the hint below the input box.",
   "助手设置没读出来，现在还不能发消息 —— 看输入框下方的提示。": "Assistant settings could not be read, so messages can't be sent yet — see the hint below the input box.",
   "发起模型测试": "Run a model test",
+  "同步模型列表": "",
   "启用 / 禁用模型": "Enable / disable models",
   "启用 / 禁用账号": "Enable / disable accounts",
   "对指定模型发一次真实请求，回报连通性与耗时。": "Sends one real request to the given model and reports reachability and latency.",
@@ -14,6 +15,7 @@
   "改账号在全局队列里的名次，决定主备与切换顺序。": "Changes an account's rank in the global queue, deciding primary/backup and failover order.",
   "新增 / 删除映射名，支持批量加前缀与同名合并到多家。": "Adds/removes mapping names, with bulk prefixing and merging a shared name across providers.",
   "查询账号余额": "Query account balance",
+  "模型列表已同步": "",
   "没有可用的模型": "No models available",
   "测一下当前最快的模型通不通": "Check whether the currently fastest model is reachable",
   "深度推理": "Deep reasoning",
@@ -28,5 +30,6 @@
   "这一版网关还没有 AI 助手接口（HTTP 404）：后端还是旧的，重新编译 / 重启客户端后再试。{message}": "This gateway build doesn't have the AI assistant API yet (HTTP 404): the backend is older. Rebuild or restart the client and try again. {message}",
   "这一轮来回已达 {n} 次上限，我先停下等你指示（可以换个说法，或拆成几步让我做）。": "This turn has reached the {n}-round-trip limit, so I stopped for your input (try rephrasing, or split it into a few steps).",
   "连接网关失败（{base}）：{message}": "Failed to reach the gateway ({base}): {message}",
-  "配置响应不完整": "Incomplete config response"
+  "配置响应不完整": "Incomplete config response",
+  "重新读取启用的模型（加账号 / 刷新模型目录后点它同步列表）": ""
 }

@@ -4,6 +4,7 @@
   "助手设置没读出来，暂时存不了对话模型 —— 看输入框下方的提示。": "As configurações do assistente não puderam ser lidas, então o modelo de chat ainda não pode ser salvo. Veja a dica abaixo da caixa de entrada.",
   "助手设置没读出来，现在还不能发消息 —— 看输入框下方的提示。": "As configurações do assistente não puderam ser lidas, então ainda não é possível enviar mensagens. Veja a dica abaixo da caixa de entrada.",
   "发起模型测试": "Executar teste de modelo",
+  "同步模型列表": "",
   "启用 / 禁用模型": "Habilitar / desabilitar modelos",
   "启用 / 禁用账号": "Habilitar / desabilitar contas",
   "对指定模型发一次真实请求，回报连通性与耗时。": "Envia uma requisição real ao modelo indicado e informa conectividade e latência.",
@@ -14,6 +15,7 @@
   "改账号在全局队列里的名次，决定主备与切换顺序。": "Altera a posição da conta na fila global, definindo titular/reserva e ordem de failover.",
   "新增 / 删除映射名，支持批量加前缀与同名合并到多家。": "Adiciona/remove nomes de mapeamento, com prefixação em lote e fusão de um mesmo nome em vários provedores.",
   "查询账号余额": "Consultar saldo da conta",
+  "模型列表已同步": "",
   "没有可用的模型": "Nenhum modelo disponível",
   "测一下当前最快的模型通不通": "Testar se o modelo mais rápido no momento responde",
   "深度推理": "Raciocínio profundo",
@@ -28,5 +30,6 @@
   "这一版网关还没有 AI 助手接口（HTTP 404）：后端还是旧的，重新编译 / 重启客户端后再试。{message}": "Esta versão do gateway ainda não tem a API do assistente de IA (HTTP 404): o backend está desatualizado. Recompile / reinicie o cliente e tente de novo. {message}",
   "这一轮来回已达 {n} 次上限，我先停下等你指示（可以换个说法，或拆成几步让我做）。": "Este turno atingiu o limite de {n} idas e voltas, então parei para aguardar sua instrução (reformule, ou divida em algumas etapas).",
   "连接网关失败（{base}）：{message}": "Falha ao conectar ao gateway ({base}): {message}",
-  "配置响应不完整": "Resposta de configuração incompleta"
+  "配置响应不完整": "Resposta de configuração incompleta",
+  "重新读取启用的模型（加账号 / 刷新模型目录后点它同步列表）": ""
 }

@@ -69,7 +69,7 @@ function SwitchLine({ id, label, checked, disabled, onCheckedChange }: {
   )
 }
 
-export function AssistantSettingsPane() {
+export function AssistantSettingsPane({ active }: { active?: boolean }) {
   const [config, setConfig] = React.useState<AssistantConfig | null>(null)
   const [models, setModels] = React.useState<string[]>([])
   const [status, setStatus] = React.useState('')
@@ -124,6 +124,38 @@ export function AssistantSettingsPane() {
   }, [])
 
   const ready = config !== null
+
+  /* 模型清单的「同步」：
+   *  · 手动 —— 模型选择器旁的「刷新」按钮（用户改了模型启用后立即可点）；
+   *  · 自动 —— 设置页是 CSS 显隐的常驻挂载，配置那段挂载 effect 一生只跑一次，
+   *    所以切到「AI 助手」分类时（settings-page 传进来的 active 翻转为 true）
+   *    重取一次清单：模型管理页刷新目录 / 账号页加账号之后的启用集合变化，
+   *    回到这个分类就能看到。刷新失败保留旧列表（初始加载已有自己的错误通路）。
+   */
+  const [refreshing, setRefreshing] = React.useState(false)
+  const refreshModels = React.useCallback(async () => {
+    setRefreshing(true)
+    try {
+      setModels(await loadModelNames())
+      setStatus(t('模型列表已同步'))
+    } catch (error) {
+      setStatus(t('读取模型清单失败：{message}', { message: errorText(error) }))
+    } finally {
+      setRefreshing(false)
+    }
+  }, [])
+  React.useEffect(() => {
+    if (active === false) return
+    let alive = true
+    void (async () => {
+      try {
+        const list = await loadModelNames()
+        if (alive) setModels(list)
+      } catch { /* 刷新失败保留旧列表 */ }
+    })()
+    return () => { alive = false }
+  }, [active])
+
   const enabledTools = React.useMemo(() => {
     const map: Record<string, boolean> = {}
     for (const tool of ASSISTANT_TOOLS) map[tool.id] = config?.tools?.[tool.id] ?? false
@@ -179,6 +211,15 @@ export function AssistantSettingsPane() {
             <span className='hint'>
               {t('列表 = 模型管理页里所有已启用的模型。助手走本地网关发起对话，消耗所选账号的额度。')}
             </span>
+            <Button
+              size='sm'
+              variant='ghost'
+              disabled={refreshing}
+              title={t('重新读取启用的模型（加账号 / 刷新模型目录后点它同步列表）')}
+              onClick={() => void refreshModels()}
+            >
+              {refreshing ? t('同步中…') : t('同步模型列表')}
+            </Button>
           </div>
         </div>
       </section>
