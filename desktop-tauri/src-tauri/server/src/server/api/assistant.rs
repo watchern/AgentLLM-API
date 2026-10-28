@@ -30,9 +30,13 @@
 //! 调的是已有的 /api/* 管理接口）。
 //!
 //! ── 记账 ────────────────────────────────────────────────────
-//! 与模型测试同一口径：进请求日志（用户在「请求日志」里看得到助手的每一次
-//! 消耗），`is_test = true` 使报表聚合排除它（人工反复发起的样本混进趋势图
-//! 会把真实流量读歪）。`client` 留空：助手是网关自己发起的，没有下游 UA。
+//! **真实流量口径**（`is_test = false`）：进请求日志（用户在「请求日志」里
+//! 看得到助手的每一次消耗），也照常折进报表聚合 —— 助手对话就是用户在网关
+//! 里的真实消耗，报表中心要统计它（此前曾与模型测试同口径记
+//! `is_test = true` 而被报表整个排除，「问了很多次会话、报表一直是 0」即
+//! 由此来，2026-10 改回）。模型测试仍走测试口径（`model_test` 的
+//! `record_started(..., true)`）：那才是人工反复发起、会把趋势读歪的样本。
+//! `client` 留空：助手是网关自己发起的，没有下游 UA。
 
 use std::sync::Arc;
 
@@ -222,8 +226,9 @@ pub async fn chat(State(state): State<ServerState>, body: Bytes) -> Response {
     let started_at = logging::now_ms();
     let telemetry = Arc::new(RequestTelemetry::with_id());
     let telemetry_id = telemetry.snapshot().id;
-    // 进行中行：与真实请求同一时点。`is_test = true` —— 报表排除、请求日志标记
-    // （与模型测试同一口径，见模块头）；下游模型名记用户点名的那个对外名
+    // 进行中行：与真实请求同一时点。`is_test = false` —— 助手对话按真实流量
+    // 口径记账（报表统计、请求日志不标「测试」，见模块头）；下游模型名记
+    // 用户点名的那个对外名
     state.request_stats().record_started(
         &telemetry_id,
         started_at,
@@ -231,7 +236,7 @@ pub async fn chat(State(state): State<ServerState>, body: Bytes) -> Response {
         &model,
         "",
         "",
-        true,
+        false,
     );
     if let Some(token) = cancellation::register(&telemetry_id) {
         telemetry.set_cancel_token(token);
@@ -272,7 +277,7 @@ pub async fn chat(State(state): State<ServerState>, body: Bytes) -> Response {
                 status: i64::from(status.as_u16()),
                 raw_request: None,
                 raw_response: None,
-                is_test: true,
+                is_test: false,
                 client: String::new(),
             };
             // 记账移交给响应流（它与流的生命周期同长）；守卫不再兜底
@@ -302,7 +307,7 @@ pub async fn chat(State(state): State<ServerState>, body: Bytes) -> Response {
                     status: 200,
                     raw_request: None,
                     raw_response,
-                    is_test: true,
+                    is_test: false,
                     client: String::new(),
                 },
                 None,
@@ -324,7 +329,7 @@ pub async fn chat(State(state): State<ServerState>, body: Bytes) -> Response {
                     status,
                     raw_request: None,
                     raw_response: None,
-                    is_test: true,
+                    is_test: false,
                     client: String::new(),
                 },
                 Some(message.clone()),
