@@ -233,7 +233,8 @@ export type GrowthCache = {
   signin?: {
     signedToday: boolean
     continuousDays: number
-    dailyAwards: string[]
+    nextRewardDays: number
+    nextRewardAward: string
   } | null
   /** 全量执行在途 */
   running: boolean
@@ -1073,15 +1074,16 @@ export async function queryGrowth(id: string): Promise<void> {
     const signinRaw = (tasksBlock.signin ?? null) as {
       signedToday?: unknown
       continuousDays?: unknown
-      dailyAwards?: unknown
+      nextRewardDays?: unknown
+      nextRewardAward?: unknown
     } | null
     const signin = signinRaw
       ? {
           signedToday: signinRaw.signedToday === true,
           continuousDays: numberOf(signinRaw.continuousDays),
-          dailyAwards: Array.isArray(signinRaw.dailyAwards)
-            ? signinRaw.dailyAwards.filter((item): item is string => typeof item === 'string')
-            : [],
+          nextRewardDays: numberOf(signinRaw.nextRewardDays),
+          nextRewardAward:
+            typeof signinRaw.nextRewardAward === 'string' ? signinRaw.nextRewardAward : '',
         }
       : null
     patchGrowth(id, {

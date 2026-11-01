@@ -562,13 +562,13 @@ function GrowthRow({ row }: { row: { id: string; name: string; provider?: string
           {isKuku && cache?.signin ? (
             <div className='ck-fold-note'>
               {cache.signin.signedToday
-                ? t('今日已签到 · 连签 {n} 天 · 每日奖励：{awards}', {
+                ? t('今日已签到 · 连签 {n} 天 · 下一奖励：{award}（还需 {days} 天）', {
                     n: cache.signin.continuousDays,
-                    awards: cache.signin.dailyAwards.join('、') || '—',
+                    award: cache.signin.nextRewardAward || '—',
+                    days: cache.signin.nextRewardDays,
                   })
-                : t('今日未签到 · 连签 {n} 天 · 签到奖励：{awards}（在库库AI客户端完成）', {
+                : t('今日未签到 · 连签 {n} 天 · 签到奖励：积分+10 / 抽奖机会（客户端可签，网关签到也会计入）', {
                     n: cache.signin.continuousDays,
-                    awards: cache.signin.dailyAwards.join('、') || '—',
                   })}
             </div>
           ) : null}

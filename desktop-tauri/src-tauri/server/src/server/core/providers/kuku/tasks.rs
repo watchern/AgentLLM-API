@@ -135,48 +135,100 @@ fn task_row(task: &Value) -> Value {
     })
 }
 
-/// 真实「签到」状态（`GET /act/v2/kukuai/signinlist`，tid 是客户端内置的
-/// 生产配置：794211789557）。读接口无头可用（实测 errno=0）；**签到动作**
-/// 本身（`/act/v2/kukuai/signin`）要求客户端 H5 页会话的 jsToken（反自动
-/// 化），无头调用返回 8001「账号异常」——签到点击仍在客户端完成，这里只
-/// 提供真实状态读数。
+/// 真实「签到」（kukuai30 体系 —— 客户端左下角签到面板的同款接口）。
 ///
-/// 返回 `{signedToday, continuousDays, dailyAwards:[名字], continuousAwards}`
-/// 供成长面板展示；读取失败返回 Err（调用方按 null 呈现）。
-pub async fn signin_state(
+/// ```text
+/// POST /act/v2/kukuai30/homepage?uid=<uk>&tid=291651792210   面板/日历
+/// POST /act/v2/kukuai30/signin?uid=<uk>&tid=291651792210     签到动作
+/// ```
+/// `uid` 是会话三件套里的 `uk`（Baidu 数字用户 id），`tid` 是客户端内置
+/// 生产配置的 signin30Tid。**无 jsToken 要求**（与 activity/freepoint 两族
+/// 不同），实测网关侧可完整执行：签到后 `signed_today` 翻转、连签天数与
+/// 下一奖励（网盘会员天卡等）照常推进。已签日再 POST 返回 8001「账号异常」
+/// （误导性文案，实测语义 = 今日已签）——以 homepage 的 `signed_today`
+/// 为准，不拿它当失败。
+///
+/// 返回归一后的 `{signedToday, continuousDays, nextRewardDays,
+/// nextRewardAward, alreadySigned}`；读取失败返回 Err。
+async fn signin30_homepage_raw(
     credentials: &credentials::KukuCredentials,
+    uid: &str,
 ) -> Result<Value, GatewayError> {
-    const SIGNIN_TID: &str = "794211789557";
+    const SIGNIN30_TID: &str = "291651792210";
     let prepared = credentials::with_business_stoken(credentials).await;
     let headers = credentials::request_headers(&prepared);
     let url = format!(
-        "{BASE_URL}/act/v2/kukuai/signinlist?tid={SIGNIN_TID}&{CLIENT_QUERY}"
+        "{BASE_URL}/act/v2/kukuai30/homepage?uid={uid}&tid={SIGNIN30_TID}&{CLIENT_QUERY}"
     );
-    let value = http::get_json_value(&url, &headers, None, Some(30_000)).await?;
-    let errno = value.get("errno").and_then(Value::as_i64).unwrap_or(-1);
-    if errno != 0 {
-        return Err(GatewayError::with_status(
-            502,
-            format!("KukuAI 签到状态读取失败（errno={errno}）"),
-        ));
+    let value = http::post_json_value(&url, &headers, &json!({}), None, Some(30_000)).await?;
+    let data = value.get("data").or_else(|| value.get("result")).cloned().unwrap_or(Value::Null);
+    if data.is_null() {
+        return Err(GatewayError::with_status(502, "KukuAI 签到面板返回为空"));
     }
-    let data = value.get("data").cloned().unwrap_or(Value::Null);
-    let daily_awards: Vec<String> = data
-        .get("daily_awards")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("name").and_then(Value::as_str))
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
+    Ok(data)
+}
+
+/// 读签到状态（homepage 的归一视图）。读取失败返回 Err（调用方按 null 呈现）。
+pub async fn signin_state(
+    credentials: &credentials::KukuCredentials,
+) -> Result<Value, GatewayError> {
+    let triple = super::session::ensure_tokens(credentials, None, false).await?;
+    let data = signin30_homepage_raw(credentials, triple.uk.trim()).await?;
     Ok(json!({
-        "signedToday": data.get("signed_today").and_then(Value::as_i64).unwrap_or(0) == 1,
+        "signedToday": data.get("signed_today").and_then(Value::as_bool).unwrap_or(false),
         "continuousDays": data.get("continuous_days").and_then(Value::as_i64).unwrap_or(0),
-        "dailyAwards": daily_awards,
+        "nextRewardDays": data.get("next_reward_days").and_then(Value::as_i64).unwrap_or(0),
+        "nextRewardAward": data.get("next_reward_award").and_then(Value::as_str).unwrap_or(""),
+        "dailyPoints": 10_i64,
+        "lotteryChances": 1_i64,
     }))
+}
+
+/// 执行真实签到（kukuai30）。已签（homepage 先判）直接返回 alreadySigned；
+/// 动作后无论服务端回什么，都以**复读 homepage 的 signed_today** 为准 ——
+/// 已签日的重复 POST 会回 8001「账号异常」，那不是失败。
+///
+/// 返回 `{success, alreadySigned, signedToday, continuousDays,
+/// nextRewardDays, nextRewardAward, message}`。
+pub async fn do_signin(
+    credentials: &credentials::KukuCredentials,
+) -> Result<Value, GatewayError> {
+    let triple = super::session::ensure_tokens(credentials, None, false).await?;
+    let uid = triple.uk.trim().to_string();
+    // 先看状态：已签就不发动作（避免 8001 噪音）
+    let before = signin30_homepage_raw(credentials, &uid).await?;
+    let signed_before = before.get("signed_today").and_then(Value::as_bool).unwrap_or(false);
+    if signed_before {
+        let mut result = signin_result(&before, false);
+        result["alreadySigned"] = json!(true);
+        return Ok(result);
+    }
+    let prepared = credentials::with_business_stoken(credentials).await;
+    let headers = credentials::request_headers(&prepared);
+    let url = format!(
+        "{BASE_URL}/act/v2/kukuai30/signin?uid={uid}&tid=291651792210&{CLIENT_QUERY}"
+    );
+    // 动作本身不校验响应内容（已签日会回 8001），成败以复读为准
+    let _ = http::post_json_value(&url, &headers, &json!({}), None, Some(30_000)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    let after = signin30_homepage_raw(credentials, &uid).await?;
+    let signed_now = after.get("signed_today").and_then(Value::as_bool).unwrap_or(false);
+    let mut result = signin_result(&after, signed_now);
+    result["alreadySigned"] = json!(false);
+    Ok(result)
+}
+
+/// homepage 数据 → 归一签到结果（`just_signed` 决定文案）
+fn signin_result(data: &Value, just_signed: bool) -> Value {
+    json!({
+        "success": data.get("signed_today").and_then(Value::as_bool).unwrap_or(false),
+        "alreadySigned": false,
+        "signedToday": data.get("signed_today").and_then(Value::as_bool).unwrap_or(false),
+        "continuousDays": data.get("continuous_days").and_then(Value::as_i64).unwrap_or(0),
+        "nextRewardDays": data.get("next_reward_days").and_then(Value::as_i64).unwrap_or(0),
+        "nextRewardAward": data.get("next_reward_award").and_then(Value::as_str).unwrap_or(""),
+        "message": if just_signed { "签到成功".to_string() } else { "今日已签到".to_string() },
+    })
 }
 
 /// 尝试上报一个任务（`POST /api/genflowpro/activity/taskcomplete`）。
