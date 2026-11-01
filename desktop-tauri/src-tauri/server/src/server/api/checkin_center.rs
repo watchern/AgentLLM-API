@@ -273,21 +273,23 @@ pub async fn get_center(State(state): State<ServerState>) -> Response {
         })
         .collect();
 
-    // 成长任务分组：WorkBuddy 国内版账号（`growth::supports_growth`）——它是
-    // 上游任务树（建画布/用专家/发对话…）的载体，判据与执行体在
-    // `providers::workbuddy::growth`（从参考项目 workbuddy2api 移植）。
+    // 成长任务分组：WorkBuddy 国内版账号（`growth::supports_growth`）与
+    // KukuAI 账号（活动任务体系，`providers::kuku::tasks`）。两者共用同一
+    // 前端 GrowthRow 渲染与 `/growth*` 端点，按 provider 分派数据源。
     // 与新手福利同一先例：快照只给账号入口清单（零上游请求），任务详情由
     // 前端展开时按需调 `GET /api/accounts/{id}/growth`（那是一次上游查询）。
     let growth_rows: Vec<Value> = accounts
         .iter()
         .filter(|account| {
-            crate::server::core::providers::workbuddy::growth::supports_growth(account)
+            let provider = account_text(account, "provider");
+            provider == "kuku"
+                || crate::server::core::providers::workbuddy::growth::supports_growth(account)
         })
         .map(|account| {
             json!({
                 "id": account_text(account, "id"),
                 "name": Value::from(account_display_name(account)),
-                "provider": "workbuddy",
+                "provider": account_text(account, "provider"),
             })
         })
         .collect();

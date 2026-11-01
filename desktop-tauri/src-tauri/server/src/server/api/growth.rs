@@ -38,6 +38,7 @@ use serde_json::{json, Value};
 use axum::body::Bytes;
 use axum::response::Response;
 
+use crate::server::core::providers::kuku;
 use crate::server::core::providers::workbuddy::growth::{
     self, school, spec, travel, GrowthAccount, TaskOutcome,
 };
@@ -137,6 +138,13 @@ fn task_row(task: &Value) -> Value {
 /// 猫猫旅行状态、开学季概况（含抽奖余额）。各块相互独立：某一块拉取失败
 /// 只在该块给 `error` 字段，不影响其余（用户要看到「哪块坏了」）。
 pub async fn status(state: &ServerState, account_id: &str) -> Response {
+    // ── KukuAI 分支（同一端点、同一前端 GrowthRow 渲染，数据源是活动任务
+    // 体系）：快照行 `provider:"kuku"` 的账号走到这里，返回与 WorkBuddy
+    // 同形的信封（energy / travel / school 为 null，前端对 null 块有兜底）。
+    if is_kuku_account(state, account_id) {
+        return kuku_status(state, account_id).await;
+    }
+
     let account = match growth_account(state, account_id) {
         Ok(account) => account,
         Err(response) => return response,
@@ -261,6 +269,11 @@ pub async fn status(state: &ServerState, account_id: &str) -> Response {
 /// 返回单条结果行（code / outcome / message / credit / energy）。界面的
 /// 「一键完成」在本地循环逐条调用本端点（见模块头的 60 秒超时说明）。
 pub async fn run_task(state: &ServerState, account_id: &str, body: &Bytes) -> Response {
+    // ── KukuAI 分支：code 即 task_id_str，走活动任务上报（见 kuku_status）──
+    if is_kuku_account(state, account_id) {
+        return kuku_run_task(state, account_id, body).await;
+    }
+
     let account = match growth_account(state, account_id) {
         Ok(account) => account,
         Err(response) => return response,
@@ -376,5 +389,90 @@ pub async fn travel_run(state: &ServerState, account_id: &str) -> Response {
         "outcome": report.outcome,
         "message": report.message,
         "credit": report.credit,
+    }))
+}
+
+// ─── KukuAI 分支（活动任务体系；同一端点，provider 分派）────────
+
+/// 该账号是否为 KukuAI（活动任务体系的载体）。
+fn is_kuku_account(state: &ServerState, account_id: &str) -> bool {
+    state
+        .store()
+        .list_accounts()
+        .get("accounts")
+        .and_then(Value::as_array)
+        .and_then(|accounts| {
+            accounts
+                .iter()
+                .find(|account| account.get("id").and_then(Value::as_str) == Some(account_id))
+                .and_then(|account| account.get("provider"))
+                .and_then(Value::as_str)
+                .map(|provider| provider == "kuku")
+        })
+        .unwrap_or(false)
+}
+
+/// KukuAI 的成长任务盘点（`GET /api/accounts/{id}/growth` 的 kuku 分支）。
+///
+/// 返回与 WorkBuddy 同形的信封：任务清单映射成 GrowthTaskRow（见
+/// `kuku::tasks::activity_tasks`），energy / streak / travel / school 这些
+/// WorkBuddy 专属块给 null（前端 GrowthRow 对 null 有兜底）。
+async fn kuku_status(state: &ServerState, account_id: &str) -> Response {
+    let credentials = match kuku::credentials::snapshot_for(state.store(), account_id) {
+        Ok(credentials) => credentials,
+        Err(error) => return management_error(error.status_code, error.message),
+    };
+    let tasks_block = match kuku::tasks::activity_tasks(&credentials).await {
+        Ok(rows) => json!({ "tasks": rows, "error": Value::Null }),
+        Err(error) => json!({ "tasks": [], "error": error.message }),
+    };
+    ok_json(json!({
+        "id": account_id,
+        "provider": "kuku",
+        "tasks": tasks_block,
+        "energy": Value::Null,
+        "streak": Value::Null,
+        "travel": Value::Null,
+        "school": Value::Null,
+    }))
+}
+
+/// KukuAI 的单任务上报（`POST /api/accounts/{id}/growth/task` 的 kuku 分支）。
+///
+/// `code` 即活动的 task_id_str；返回与 WorkBuddy 执行结果同形的行
+/// （outcome / message / credit），界面在任务行旁显示真实结果。
+async fn kuku_run_task(state: &ServerState, account_id: &str, body: &Bytes) -> Response {
+    let request = parse_request(body);
+    if request.code.is_empty() {
+        return management_error(400, "缺少任务 ID（code = task_id_str）");
+    }
+    let credentials = match kuku::credentials::snapshot_for(state.store(), account_id) {
+        Ok(credentials) => credentials,
+        Err(error) => return management_error(error.status_code, error.message),
+    };
+    let result = kuku::tasks::report_task(&credentials, &request.code).await;
+    let (outcome, message) = match result {
+        Ok(report) => {
+            let success = report.get("success").and_then(Value::as_bool) == Some(true);
+            let message = report
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if success {
+                ("success".to_string(), message)
+            } else {
+                ("failed".to_string(), message)
+            }
+        }
+        Err(error) => ("failed".to_string(), error.message),
+    };
+    ok_json(json!({
+        "id": account_id,
+        "code": request.code,
+        "outcome": outcome,
+        "message": message,
+        "credit": 0,
+        "energy": 0,
     }))
 }

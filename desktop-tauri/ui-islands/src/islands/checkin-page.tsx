@@ -462,15 +462,19 @@ function PlanRow({ row }: {
  * 开学季（执行 + 抽奖）。写动作的进度由后端逐条留间隔，按钮以「执行中…」
  * 反映在途 —— 一次全量可能要几十秒，这是上游限速的既定事实。
  */
-function GrowthRow({ row }: { row: { id: string; name: string } }) {
+function GrowthRow({ row }: { row: { id: string; name: string; provider?: string } }) {
+  // KukuAI 行复用同一渲染骨架，但数据源是活动任务体系（taskscore/tasklist），
+  // 且服务端校验真实行为 —— 任务一律 unforgeable，没有可自助执行的动作，
+  // 「一键完成 / 领取」两颗 WorkBuddy 专属按钮对它隐藏。
+  const isKuku = row.provider === 'kuku'
   const cache = getCheckinStore().growth.get(row.id)
   const tasks = cache?.tasks ?? []
   const supported = tasks.filter(task => task.supported && !task.unforgeable)
   const pending = supported.filter(task => task.status !== 'claimed' && task.current < task.target)
   const hasDetail = cache?.status === 'loaded' && tasks.length > 0
   const expanded = hasDetail && growthExpanded(row.id)
-  const travel = cache?.travel
-  const school = cache?.school
+  const travel = isKuku ? null : cache?.travel
+  const school = isKuku ? null : cache?.school
   const results = cache?.results ?? []
   const resultOf = (code: string) => results.find(item => item.code === code)
   return (
@@ -488,13 +492,17 @@ function GrowthRow({ row }: { row: { id: string; name: string } }) {
         tabIndex={hasDetail ? 0 : -1}
         aria-expanded={hasDetail ? expanded : undefined}
       >
-        <ProviderLogo id='workbuddy' label='WorkBuddy' />
+        <ProviderLogo id={isKuku ? 'kuku' : 'workbuddy'} label={isKuku ? 'KukuAI' : 'WorkBuddy'} />
         <div className='ck-prov-info'>
           <div className='ck-prov-name'>{row.name || row.id}</div>
           <div className='ck-prov-desc'>
             {cache?.status === 'loaded'
-              ? t('{total} 项任务 · {pending} 项可完成', { total: supported.length, pending: pending.length })
-              : t('查询任务树并一键点亮 / 领奖（含开学季与猫猫旅行）')}
+              ? isKuku
+                ? t('KukuAI 每日活动 · {total} 项任务（需在客户端完成动作计分）', { total: tasks.length })
+                : t('{total} 项任务 · {pending} 项可完成', { total: supported.length, pending: pending.length })
+              : isKuku
+                ? t('读取库库AI的每日活动任务（对话 / 浏览需在客户端完成）')
+                : t('查询任务树并一键点亮 / 领奖（含开学季与猫猫旅行）')}
             {cache?.checkedAt ? ` · ${t('查询于 {time}', { time: formatTime(cache.checkedAt) })}` : ''}
           </div>
         </div>
@@ -514,6 +522,8 @@ function GrowthRow({ row }: { row: { id: string; name: string } }) {
           >
             {cache?.status === 'loading' ? t('查询中…') : t('查询任务')}
           </Button>
+          {!isKuku ? (
+            <>
           <Button
             size='sm'
             variant='outline'
@@ -532,6 +542,8 @@ function GrowthRow({ row }: { row: { id: string; name: string } }) {
           >
             {t('领取')}
           </Button>
+            </>
+          ) : null}
           {hasDetail ? <span className='ck-chev' aria-hidden>›</span> : null}
         </div>
       </div>
@@ -540,11 +552,13 @@ function GrowthRow({ row }: { row: { id: string; name: string } }) {
       ) : null}
       {expanded ? (
         <div className='ck-prov-detail'>
+          {!isKuku ? (
           <div className='ck-fold-note'>
             {cache?.energy !== null && cache?.energy !== undefined ? t('能量 {n}', { n: cache.energy }) : ''}
             {cache?.streak !== null && cache?.streak !== undefined ? ` · ${t('连登 {n} 天', { n: cache.streak })}` : ''}
             {cache?.energy === null && cache?.streak === null ? t('（能量 / 连登读数本次未取到）') : ''}
           </div>
+          ) : null}
           {tasks.map(task => {
             const result = resultOf(task.code)
             return (
@@ -573,7 +587,8 @@ function GrowthRow({ row }: { row: { id: string; name: string } }) {
               </div>
             )
           })}
-          {/* ── 猫猫旅行 ── */}
+          {/* ── 猫猫旅行（WorkBuddy 专属）── */}
+          {!isKuku ? (
           <div className='ck-task-line'>
             <span className='ck-task-tick'>🐾</span>
             <span>
@@ -598,7 +613,9 @@ function GrowthRow({ row }: { row: { id: string; name: string } }) {
               </Button>
             </span>
           </div>
-          {/* ── 开学季活动 ── */}
+          ) : null}
+          {/* ── 开学季活动（WorkBuddy 专属）── */}
+          {!isKuku ? (
           <div className='ck-task-line'>
             <span className='ck-task-tick'>🎓</span>
             <span>
@@ -622,6 +639,7 @@ function GrowthRow({ row }: { row: { id: string; name: string } }) {
               </Button>
             </span>
           </div>
+          ) : null}
           {cache?.schoolText ? <div className='ck-fold-note'>{cache.schoolText}</div> : null}
           {cache?.lotteryText ? <div className='ck-fold-note'>{cache.lotteryText}</div> : null}
         </div>
@@ -858,7 +876,7 @@ function CenterTab({ store }: { store: CheckinStore }) {
           <div className='panel-head'>
             <h2>{t('成长任务')}</h2>
             <span className='panel-sub'>
-              {t('WorkBuddy 国内版 · 查询任务树后一键点亮 / 领奖 · 含开学季与猫猫旅行 · 点击行展开明细')}
+              {t('WorkBuddy 国内版成长任务 / KukuAI 每日活动 · 点击行展开明细')}
             </span>
           </div>
           {growthRows.length > 0 ? (
@@ -866,7 +884,7 @@ function CenterTab({ store }: { store: CheckinStore }) {
               {growthRows.map(row => <GrowthRow key={row.id} row={row} />)}
             </div>
           ) : (
-            <div className='ck-empty'>{t('没有支持成长任务的账号（需要 WorkBuddy 国内版）。')}</div>
+            <div className='ck-empty'>{t('没有支持成长任务的账号（需要 WorkBuddy 国内版或 KukuAI）。')}</div>
           )}
         </section>
       </div>

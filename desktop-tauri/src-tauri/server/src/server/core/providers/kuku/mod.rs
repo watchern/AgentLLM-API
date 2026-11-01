@@ -61,6 +61,7 @@ pub mod http;
 pub mod login;
 pub mod models;
 pub mod session;
+pub mod tasks;
 
 /// 主站（对话 / 目录 / 积分全在这一个域上）
 pub const BASE_URL: &str = "https://kuku.baidu.com";

@@ -1,0 +1,196 @@
+//! KukuAI 活动任务（「成长任务」形态的数据源）。
+//!
+//! ── 上游（2026-11-01 客户端 1.7.3.107 逆向 + 真实账号实测）──────
+//! ```text
+//! GET  /api/taskscore/tasklist?task_from=activity_kuku&{客户端形态 query}
+//!      → {errno, result:{list:[{task_type, task_id_str, task_name,
+//!         task_desc, task_status, task_finish_count, task_count_max, …}]}}
+//! POST /api/genflowpro/activity/taskcomplete    （JSON 体）
+//!      body: {task_from, task_id_str, app_id, clienttype, version, …}
+//!      → {errno, errmsg, data?}
+//! ```
+//! 现行每日活动是 `task_from=activity_kuku`（`main` / `kuku-svip` 实测
+//! errno=40001）。任务：与库库AI对话（249）、邀请朋友（250）、
+//! 浏览知识广场（251）。
+//!
+//! ── 为什么只读 + 尽力上报，不承诺计分 ────────────────────────
+//! 服务端校验**真实行为**：实测带正确 task_id_str、真实对话 session_id、
+//! 设备标识上报一律 errno=-8（客户端上报时还带自家设备指纹与会话上下文，
+//! 网关侧代发不被计入）。所以这里的上报是 best-effort：errno=0 照常计成功，
+//! -8 如实返回「需在库库AI客户端完成」；展示面板（任务清单 + 完成状态）
+//! 则完全真实可用。
+//!
+//! ── 硬约束 ────────────────────────────────────────────────
+//! 只读 + 上报两类请求，绝不 unwrap/expect（release 是 panic=abort）。
+
+use serde_json::{json, Value};
+
+use crate::server::errors::GatewayError;
+
+use super::credentials;
+use super::http;
+use super::{APP_ID, BASE_URL};
+
+/// 客户端形态 query（与 checkin.rs 同一口径）
+const CLIENT_QUERY: &str =
+    "app_id=123971023&clienttype=401&version=1.7.3.107&channel=chunlei";
+
+/// 现行每日活动的 task_from
+const TASK_FROM: &str = "activity_kuku";
+
+/// 可自助上报的任务类型（249=与库库AI对话、251=浏览知识广场）；
+/// 250=邀请朋友需要真实受邀人，不代报
+fn self_serve(task_type: &str) -> bool {
+    task_type == "249" || task_type == "251"
+}
+
+/// 拉取现行每日活动的任务清单，映射成**成长任务行**的展示形状
+/// （`api::growth` 的 `task_row` 同款字段：code/title/description/status/
+/// current/target/supported/unforgeable…，前端 GrowthRow 直接渲染）。
+pub async fn activity_tasks(
+    credentials: &credentials::KukuCredentials,
+) -> Result<Vec<Value>, GatewayError> {
+    let prepared = credentials::with_business_stoken(credentials).await;
+    let headers = credentials::request_headers(&prepared);
+    let url = format!(
+        "{BASE_URL}/api/taskscore/tasklist?task_from={TASK_FROM}&{CLIENT_QUERY}"
+    );
+    let value = http::get_json_value(&url, &headers, None, Some(30_000)).await?;
+    let errno = value.get("errno").and_then(Value::as_i64).unwrap_or(-1);
+    if errno != 0 {
+        let message = value
+            .get("show_msg")
+            .or_else(|| value.get("errmsg"))
+            .and_then(Value::as_str)
+            .unwrap_or("未知错误");
+        return Err(GatewayError::with_status(
+            401,
+            format!("KukuAI 活动任务清单读取失败（errno={errno}：{message}）——请重新登录该账号"),
+        ));
+    }
+    let tasks = value
+        .get("result")
+        .and_then(|result| result.get("list"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(tasks.iter().map(task_row).collect())
+}
+
+/// 一条任务 → 成长任务展示行。
+///
+/// `status` 复用 WorkBuddy 成长任务的口径词汇：已完成（今日次数用尽 /
+/// task_status 非 0）→ `claimed`（界面 ✓已领取），未完成 → `accepted`。
+/// `unforgeable` 如实标注：这些任务必须在库库AI客户端里完成真实动作，
+/// 网关代上报不计分（界面显示「需真实操作」徽标 + 原因）。
+fn task_row(task: &Value) -> Value {
+    let task_type = task
+        .get("task_type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let name = task
+        .get("task_name")
+        .and_then(Value::as_str)
+        .unwrap_or("未知任务")
+        .to_string();
+    let description = task
+        .get("task_desc")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let code = task
+        .get("task_id_str")
+        .or_else(|| task.get("task_id"))
+        .map(|value| value.to_string())
+        .unwrap_or_default()
+        .trim_matches('"')
+        .to_string();
+    let finish_count = task
+        .get("task_finish_count")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let count_max = task
+        .get("task_count_max")
+        .and_then(Value::as_i64)
+        .unwrap_or(1);
+    let status_raw = task
+        .get("task_status")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let finished = status_raw != 0 || (count_max > 0 && finish_count >= count_max);
+    json!({
+        "code": code,
+        "title": name,
+        "description": description,
+        "status": if finished { "claimed" } else { "accepted" },
+        "current": finish_count,
+        "target": count_max,
+        "supported": self_serve(&task_type),
+        // 面板行如实标注：这类任务网关代报不计分（实测多轮），必须客户端完成
+        "unforgeable": true,
+        "unforgeableReason": "需在库库AI客户端完成对应动作（服务端校验真实行为，网关代上报不计分）",
+        "kind": "kuku-activity",
+        "source": "activity_kuku",
+    })
+}
+
+/// 尝试上报一个任务（`POST /api/genflowpro/activity/taskcomplete`）。
+///
+/// 返回归一后的 `{success, errno, message, reward}`：errno=0 → success=true
+/// （reward 取 data.reward_point，可能为 0）；-8 → success=false 且 message
+/// 说明需客户端完成；其余 errno 原样透出服务端文案。
+pub async fn report_task(
+    credentials: &credentials::KukuCredentials,
+    task_id_str: &str,
+) -> Result<Value, GatewayError> {
+    if task_id_str.trim().is_empty() {
+        return Err(GatewayError::with_status(400, "缺少任务 ID（task_id_str）"));
+    }
+    let prepared = credentials::with_business_stoken(credentials).await;
+    let headers = credentials::request_headers(&prepared);
+    let url = format!(
+        "{BASE_URL}/api/genflowpro/activity/taskcomplete?{CLIENT_QUERY}"
+    );
+    let body = json!({
+        "task_from": TASK_FROM,
+        "task_id_str": task_id_str.trim(),
+        "app_id": APP_ID,
+        "clienttype": 401_i64,
+        "version": "1.7.3.107",
+    });
+    let value = http::post_json_value(&url, &headers, &body, None, Some(30_000)).await?;
+    let errno = value.get("errno").and_then(Value::as_i64).unwrap_or(-1);
+    let message = value
+        .get("show_msg")
+        .or_else(|| value.get("errmsg"))
+        .and_then(Value::as_str)
+        .unwrap_or("未知错误")
+        .to_string();
+    let reward = value
+        .get("data")
+        .and_then(|data| data.get("reward_point"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    if errno == 0 {
+        Ok(json!({
+            "success": true,
+            "errno": 0,
+            "message": if reward > 0 { format!("上报成功，+{reward} 积分") } else { "上报成功".to_string() },
+            "reward": reward,
+        }))
+    } else {
+        Ok(json!({
+            "success": false,
+            "errno": errno,
+            // -8 = 服务端校验真实行为未发生；errmsg「领取成功」是上游的
+            // 通用占位文案，直接透出会误导，这里按实测语义改写
+            "message": if errno == -8 {
+                "未达成：需在库库AI客户端完成对应动作（对话 / 浏览由客户端计分，网关代上报不计）".to_string()
+            } else {
+                format!("上报未成功（errno={errno}：{message}）")
+            },
+            "reward": 0,
+        }))
+    }
+}
