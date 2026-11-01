@@ -1,27 +1,36 @@
-//! KukuAI 每日签到：免费领积分活动（freepoint）的每日任务领取。
+//! KukuAI 每日签到：活动任务面板（taskscore/tasklist）+ 任务上报尝试。
 //!
-//! ── 上游是什么（2026-10-08 真实凭证实测 + kuku2api 同款）────────
+//! ── 上游变迁（2026-11-01 实测 + 客户端 1.7.3.107 app.asar 逆向）──
+//! 旧「免费领积分」（freepoint/homenew + freepoint/taskComplete，任务
+//! LOGIN/CHAT）已被百度**下线**：homenew 返回空 activities、taskComplete
+//! 返回 `complete_status:"FAIL"`——旧实现把它误判成「已领过」，签到中心
+//! 从此显示错误状态。
+//!
+//! 现行体系是**活动任务上报制**（客户端 `/workbench/new-task`）：
 //! ```text
-//! GET  /api/genflowpro/freepoint/homenew?{WEB_QUERY}
-//!      → {errno, data:{activities:[{activity_key, activity_name, period_no,
-//!         tabs:[{tasks:[{task_type, task_name, task_status, single_reward_point,
-//!         claimable_point}]}]}]}}
-//! POST /api/genflowpro/freepoint/taskComplete?{WEB_QUERY}
-//!      body: task_type=LOGIN|CHAT        （x-www-form-urlencoded）
-//!      → {errno, data:{complete_status, reward_point}}
+//! GET  /api/taskscore/tasklist?task_from=activity_kuku&{客户端形态 query}
+//!      → {errno, result:{list:[{task_type, task_id_str, task_name,
+//!         task_desc, task_status, task_finish_count, task_mhz, …}]}}
+//! POST /api/genflowpro/activity/taskcomplete    （JSON 体）
+//!      body: {task_from, task_id_str, app_id, clienttype, version, …}
+//!      → {errno, errmsg}
 //! ```
-//! 实测要点：
-//!   - `homenew` 的任务状态 `FINISHED` / `UNFINISHED`，`claimable_point` 恒 0
-//!     —— **不能拿它当领取门槛**（「完成一次对话」UNFINISHED 照样领到 +50）；
-//!   - `taskComplete` **幂等**：重复领返回 `SUCCESS` + `reward_point=0`（或
-//!     kuku2api 记录的 `BADGE_ALREADY_RECEIVED`），因此「已领过」不算失败；
-//!   - 每日可自助完成的是 `LOGIN`（每日登录）与 `CHAT`（完成一次对话）；
-//!     `INVITE_VISIT` / `INVITE_DOWNLOAD` 要真实受邀人，接口上强领只会失败，
-//!     不进领取清单（kuku2api 同款取舍）。
+//! 实测要点（真实账号多轮验证）：
+//!   - `task_from=activity_kuku` 是现行每日活动（`main` / `kuku-svip` 已
+//!     返回 errno=40001）；任务：与库库AI对话（249，+10积分×3/日）、
+//!     邀请朋友（250）、浏览知识广场（251）；
+//!   - **上报必须带服务端认的 `task_id_str`**（清单里拿），缺了/错了都是
+//!     errno=-8；带上之后仍 -8 —— 服务端校验**真实行为**（对话要在客户端
+//!     会话里发生、浏览要在客户端页面发生，客户端上报时还带设备指纹
+//!     devuid/cuid 与 session_id），网关侧代领不被计入（含网关自己发起的
+//!     真实对话 + session_id 上报，实测同样 -8）；
+//!   - 因此本实现做的是「如实反映 + 尽力上报」：面板展示真实任务与完成
+//!     状态，逐任务尝试上报，errno=0 记成功、-8 如实告知需在客户端完成，
+//!     其余 errno 透出服务端文案。
 //!
 //! ── 会话前提 ────────────────────────────────────────────────
-//! freepoint 是业务接口，与 userreport 同一道会话门：调 `with_business_stoken`
-//! 先换发 genflowpro STOKEN（`engine.rs`），老账号 / 通行证级 STOKEN 也能签。
+//! 与旧实现同一道会话门：调 `with_business_stoken` 先换发 genflowpro
+//! STOKEN（`engine.rs`），实测 errno=0 全程可用。
 //!
 //! ── 硬约束 ──────────────────────────────────────────────────
 //! release 是 `panic=abort`：本文件零 unwrap/expect/panic。
@@ -34,15 +43,28 @@ use crate::server::logging;
 
 use super::credentials;
 use super::http;
-use super::{BASE_URL, WEB_QUERY};
+use super::{APP_ID, BASE_URL};
 
-/// 每日可自助完成的任务（类型，展示名）。展示名用于结果文案。
-const DAILY_TASKS: [(&str, &str); 2] = [("LOGIN", "每日登录"), ("CHAT", "完成一次对话")];
+/// 客户端形态 query（现行活动接口按桌面客户端 1.7.3.107 实测可用；
+/// 旧的 web 400/1.4.4 形态在活动接口上已无意义）
+const CLIENT_QUERY: &str =
+    "app_id=123971023&clienttype=401&version=1.7.3.107&channel=chunlei";
+
+/// 现行每日活动的 task_from（`main` / `kuku-svip` 实测 errno=40001）
+const TASK_FROM: &str = "activity_kuku";
+
+/// 上报后任务状态字段里「未完成」的判定值（清单实测未完成=0；
+/// 完成后的取值上游未实测到，按非 0 从宽处理）
+const TASK_STATUS_UNFINISHED: i64 = 0;
 
 /// KukuAI 账号的每日签到（自动签到框架的 claim）。
 ///
 /// 返回 `{success, msg}` —— 与 WorkBuddy / 小浣熊 / AutoClaw / Qoder / Loomy
 /// 的 claim 同一形状（`billing::checkin` 的汇总只认这两个字段）。
+///
+/// 流程：任务清单 → 逐任务上报（249 对话 / 251 知识广场这类可自助任务；
+/// 250 邀请类跳过）→ 汇总成如实的状态文案。**不再误报**：旧接口的
+/// 「FAIL=已领过」判断随 freepoint 一起删除。
 pub async fn claim_daily_checkin(
     store: &AccountStore,
     account_id: &str,
@@ -51,87 +73,147 @@ pub async fn claim_daily_checkin(
     let prepared = credentials::with_business_stoken(&credentials).await;
     let headers = credentials::request_headers(&prepared);
 
-    // 1) 任务面板：先探一次会话（freepoint 与 userreport 同一道门，-6 就是
-    //    登录态问题），顺带确认活动面板可读。
-    let panel_url = format!("{BASE_URL}/api/genflowpro/freepoint/homenew?{WEB_QUERY}");
-    let panel = http::get_json_value(&panel_url, &headers, None, Some(30_000)).await?;
-    let errno = panel.get("errno").and_then(Value::as_i64).unwrap_or(-1);
+    // 1) 任务清单（现行活动面板；errno 非 0 = 登录态或活动侧问题）
+    let list_url = format!(
+        "{BASE_URL}/api/taskscore/tasklist?task_from={TASK_FROM}&{CLIENT_QUERY}"
+    );
+    let value = http::get_json_value(&list_url, &headers, None, Some(30_000)).await?;
+    let errno = value.get("errno").and_then(Value::as_i64).unwrap_or(-1);
     if errno != 0 {
-        let message = panel
+        let message = value
             .get("show_msg")
-            .or_else(|| panel.get("errmsg"))
+            .or_else(|| value.get("errmsg"))
             .and_then(Value::as_str)
             .unwrap_or("未知错误");
         return Err(GatewayError::with_status(
             401,
-            format!("KukuAI 签到失败（freepoint errno={errno}：{message}）——请重新登录该账号"),
+            format!("KukuAI 签到失败（tasklist errno={errno}：{message}）——请重新登录该账号"),
         ));
     }
+    let tasks = value
+        .get("result")
+        .and_then(|result| result.get("list"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if tasks.is_empty() {
+        let msg = "当前没有进行中的每日活动（任务清单为空）".to_string();
+        logging::log("[Checkin]", &format!("✅ {msg}"));
+        return Ok(json!({ "success": true, "msg": msg }));
+    }
 
-    // 2) 逐个领取。单个任务失败只记日志继续（一个任务被风控不该拖垮另
-    //    一个），与「个别账号查询失败不再拖垮整轮定时查询」同一取舍。
-    let mut newly: Vec<String> = Vec::new();
-    let mut already_claimed = false;
-    let mut total = 0i64;
-    for (task_type, task_label) in DAILY_TASKS {
-        let url = format!("{BASE_URL}/api/genflowpro/freepoint/taskComplete?{WEB_QUERY}");
-        let value = match http::post_form_value(
-            &url,
-            &headers,
-            &[("task_type", task_type)],
-            None,
-            Some(30_000),
-        )
-        .await
-        {
-            Ok(value) => value,
-            Err(error) => {
-                logging::log(
-                    "[Checkin]",
-                    &format!("⚠️ KukuAI「{task_label}」领取失败：{}", error.message),
-                );
-                continue;
-            }
-        };
-        let errno = value.get("errno").and_then(Value::as_i64).unwrap_or(-1);
-        if errno != 0 {
-            let message = value
-                .get("show_msg")
-                .or_else(|| value.get("errmsg"))
-                .and_then(Value::as_str)
-                .unwrap_or("未知错误");
-            logging::log(
-                "[Checkin]",
-                &format!("⚠️ KukuAI「{task_label}」领取失败（errno={errno}：{message}）"),
-            );
-            continue;
-        }
-        let data = value.get("data").cloned().unwrap_or(Value::Null);
-        let status = data
-            .get("complete_status")
+    // 2) 逐任务处理。可自助上报的才尝试（邀请类需要真实受邀人，跳过）；
+    //    单个任务失败只记日志继续（与其它家同一取舍）。
+    let mut claimed: Vec<String> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    let mut done: Vec<String> = Vec::new();
+    for task in &tasks {
+        let task_type = task
+            .get("task_type")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let reward = data
-            .get("reward_point")
+        let name = task
+            .get("task_name")
+            .and_then(Value::as_str)
+            .unwrap_or("未知任务")
+            .to_string();
+        let task_id = task
+            .get("task_id_str")
+            .or_else(|| task.get("task_id"))
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
+        let status = task
+            .get("task_status")
+            .and_then(Value::as_i64)
+            .unwrap_or(TASK_STATUS_UNFINISHED);
+        let finish_count = task
+            .get("task_finish_count")
             .and_then(Value::as_i64)
             .unwrap_or(0);
-        if status.eq_ignore_ascii_case("SUCCESS") && reward > 0 {
-            newly.push(format!("{task_label}+{reward}"));
-            total += reward;
-        } else {
-            // SUCCESS + reward_point=0（重复领取）或非 SUCCESS（已领标记）：
-            // 都是「今天已经领过」，不算失败（幂等，与 Loomy 同一口径）。
-            already_claimed = true;
+        // 邀请类任务需要真实受邀人，网关不代报（与旧实现跳过 INVITE_* 同款）
+        if task_type == "250" || name.contains("邀请") {
+            continue;
         }
+        if status != TASK_STATUS_UNFINISHED || finish_count > 0 {
+            done.push(name);
+            continue;
+        }
+        if task_id.is_empty() {
+            pending.push(name);
+            continue;
+        }
+        // 上报一次（JSON 体，字段按客户端 taskcomplete 的构造口径）
+        let url = format!("{BASE_URL}/api/genflowpro/activity/taskcomplete?{CLIENT_QUERY}");
+        let body = json!({
+            "task_from": TASK_FROM,
+            "task_id_str": task_id,
+            "app_id": APP_ID,
+            "clienttype": 401_i64,
+            "version": "1.7.3.107",
+        });
+        match http::post_json_value(&url, &headers, &body, None, Some(30_000)).await {
+            Ok(value) => {
+                let report_errno = value.get("errno").and_then(Value::as_i64).unwrap_or(-1);
+                if report_errno == 0 {
+                    let reward = value
+                        .get("data")
+                        .and_then(|data| data.get("reward_point"))
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
+                    claimed.push(if reward > 0 {
+                        format!("{name}+{reward}")
+                    } else {
+                        name
+                    });
+                } else {
+                    // -8 = 服务端校验「真实行为未发生」（对话/浏览需在客户端
+                    // 完成）；其余 errno 原样透出服务端文案
+                    let message = value
+                        .get("show_msg")
+                        .or_else(|| value.get("errmsg"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("未知错误");
+                    logging::log(
+                        "[Checkin]",
+                        &format!(
+                            "⚠️ KukuAI「{name}」上报未达成（errno={report_errno}：{message}）\
+                             ——需在库库AI客户端完成对应动作"
+                        ),
+                    );
+                    pending.push(name);
+                }
+            }
+            Err(error) => {
+                logging::log(
+                    "[Checkin]",
+                    &format!("⚠️ KukuAI「{name}」上报失败：{}", error.message),
+                );
+                pending.push(name);
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     }
 
-    let msg = if !newly.is_empty() {
-        format!("签到完成：{}（共 +{total}）", newly.join("、"))
-    } else if already_claimed {
-        "今日积分已领过（任务接口幂等，无新增）".to_string()
+    let mut parts: Vec<String> = Vec::new();
+    if !claimed.is_empty() {
+        parts.push(format!("已上报：{}", claimed.join("、")));
+    }
+    if !done.is_empty() {
+        parts.push(format!("今日已完成：{}", done.join("、")));
+    }
+    if !pending.is_empty() {
+        parts.push(format!(
+            "未达成（需在库库AI客户端完成对应动作后由客户端计分）：{}",
+            pending.join("、")
+        ));
+    }
+    let msg = if parts.is_empty() {
+        "当前没有可自助完成的每日任务".to_string()
     } else {
-        "本次没有可领取的每日任务（活动可能未开始或已结束）".to_string()
+        parts.join("；")
     };
     logging::log("[Checkin]", &format!("✅ {msg}"));
     Ok(json!({ "success": true, "msg": msg }))

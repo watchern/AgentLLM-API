@@ -33,9 +33,13 @@
 //! `channel/clienttype/version`，桌面客户端形态 `401/1.6.7`）。
 //!
 //! ── 签到 ──────────────────────────────────────────────────
-//! 「免费领积分」活动的每日任务领取（`freepoint/homenew` 面板 +
-//! `freepoint/taskComplete`，任务 `LOGIN` / `CHAT`），已接进
-//! `core::auto_checkin`（清单里列 `kuku`），claim 见 `kuku::checkin`。
+//! 「免费领积分」旧活动（freepoint/homenew + taskComplete）已被百度下线
+//! （2026-11-01 实测：面板空 activities、taskComplete 恒 FAIL）。现行体系是
+//! **活动任务上报制**：`GET /api/taskscore/tasklist?task_from=activity_kuku`
+//! 面板 + `POST /api/genflowpro/activity/taskcomplete`（JSON 体，需
+//! task_id_str + 客户端形态字段），已接进 `core::auto_checkin`（清单里列
+//! `kuku`），claim 见 `kuku::checkin`。服务端校验真实行为（对话 / 浏览需在
+//! 客户端完成），网关侧上报未达成的任务如实显示为「未达成」。
 //! 业务会话前提（换发 genflowpro STOKEN）见 `engine.rs`。
 //!
 //! ── 刷新 / 登录形态 ────────────────────────────────────────
