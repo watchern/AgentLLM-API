@@ -422,10 +422,19 @@ async fn kuku_status(state: &ServerState, account_id: &str) -> Response {
         Ok(credentials) => credentials,
         Err(error) => return management_error(error.status_code, error.message),
     };
-    let tasks_block = match kuku::tasks::activity_tasks(&credentials).await {
+    let mut tasks_block = match kuku::tasks::activity_tasks(&credentials).await {
         Ok(rows) => json!({ "tasks": rows, "error": Value::Null }),
         Err(error) => json!({ "tasks": [], "error": error.message }),
     };
+    // 真实「签到」状态读数（今日是否已签 / 连签天数 / 每日奖励）；签到动作
+    // 本身要求客户端 H5 会话的 jsToken，无头调用被拒（8001），所以只读。
+    let signin = match kuku::tasks::signin_state(&credentials).await {
+        Ok(signin) => signin,
+        Err(_) => Value::Null,
+    };
+    if let Some(object) = tasks_block.as_object_mut() {
+        object.insert("signin".to_string(), signin);
+    }
     ok_json(json!({
         "id": account_id,
         "provider": "kuku",

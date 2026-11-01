@@ -229,6 +229,12 @@ export type GrowthCache = {
     lottery?: { balance?: number; totalEarned?: number } | null
     error?: string | null
   } | null
+  /** KukuAI 专属：真实签到状态读数（签到动作在客户端完成，这里只读） */
+  signin?: {
+    signedToday: boolean
+    continuousDays: number
+    dailyAwards: string[]
+  } | null
   /** 全量执行在途 */
   running: boolean
   /** 开学季 + 抽奖在途 */
@@ -1056,9 +1062,28 @@ export async function queryGrowth(id: string): Promise<void> {
   patchGrowth(id, { status: 'loading', error: undefined })
   try {
     const data = await bridge().getGrowthStatus?.(id)
-    const tasksBlock = (data?.tasks ?? {}) as { tasks?: unknown; error?: unknown }
+    const tasksBlock = (data?.tasks ?? {}) as {
+      tasks?: unknown
+      error?: unknown
+      signin?: unknown
+    }
     const travel = (data?.travel ?? null) as GrowthCache['travel']
     const schoolRaw = (data?.school ?? null) as (GrowthCache['school'] & { tasks?: unknown }) | null
+    // KukuAI 的真实签到状态（tasks 块里带的 signin 读数；读取失败为 null）
+    const signinRaw = (tasksBlock.signin ?? null) as {
+      signedToday?: unknown
+      continuousDays?: unknown
+      dailyAwards?: unknown
+    } | null
+    const signin = signinRaw
+      ? {
+          signedToday: signinRaw.signedToday === true,
+          continuousDays: numberOf(signinRaw.continuousDays),
+          dailyAwards: Array.isArray(signinRaw.dailyAwards)
+            ? signinRaw.dailyAwards.filter((item): item is string => typeof item === 'string')
+            : [],
+        }
+      : null
     patchGrowth(id, {
       status: 'loaded',
       checkedAt: Date.now(),
@@ -1069,6 +1094,7 @@ export async function queryGrowth(id: string): Promise<void> {
       school: schoolRaw
         ? { ...schoolRaw, tasks: normalizeGrowthTasks(schoolRaw.tasks) }
         : null,
+      signin,
       // 任务列表本身的失败挂在行级 error 上（账号级 status 仍是 loaded ——
       // 其余三块有数据可看，不该整行显示成「查询失败」）
       error: typeof tasksBlock.error === 'string' ? tasksBlock.error : undefined,

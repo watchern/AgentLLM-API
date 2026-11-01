@@ -559,6 +559,19 @@ function GrowthRow({ row }: { row: { id: string; name: string; provider?: string
             {cache?.energy === null && cache?.streak === null ? t('（能量 / 连登读数本次未取到）') : ''}
           </div>
           ) : null}
+          {isKuku && cache?.signin ? (
+            <div className='ck-fold-note'>
+              {cache.signin.signedToday
+                ? t('今日已签到 · 连签 {n} 天 · 每日奖励：{awards}', {
+                    n: cache.signin.continuousDays,
+                    awards: cache.signin.dailyAwards.join('、') || '—',
+                  })
+                : t('今日未签到 · 连签 {n} 天 · 签到奖励：{awards}（在库库AI客户端完成）', {
+                    n: cache.signin.continuousDays,
+                    awards: cache.signin.dailyAwards.join('、') || '—',
+                  })}
+            </div>
+          ) : null}
           {tasks.map(task => {
             const result = resultOf(task.code)
             return (

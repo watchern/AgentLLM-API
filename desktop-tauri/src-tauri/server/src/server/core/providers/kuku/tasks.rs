@@ -135,6 +135,50 @@ fn task_row(task: &Value) -> Value {
     })
 }
 
+/// 真实「签到」状态（`GET /act/v2/kukuai/signinlist`，tid 是客户端内置的
+/// 生产配置：794211789557）。读接口无头可用（实测 errno=0）；**签到动作**
+/// 本身（`/act/v2/kukuai/signin`）要求客户端 H5 页会话的 jsToken（反自动
+/// 化），无头调用返回 8001「账号异常」——签到点击仍在客户端完成，这里只
+/// 提供真实状态读数。
+///
+/// 返回 `{signedToday, continuousDays, dailyAwards:[名字], continuousAwards}`
+/// 供成长面板展示；读取失败返回 Err（调用方按 null 呈现）。
+pub async fn signin_state(
+    credentials: &credentials::KukuCredentials,
+) -> Result<Value, GatewayError> {
+    const SIGNIN_TID: &str = "794211789557";
+    let prepared = credentials::with_business_stoken(credentials).await;
+    let headers = credentials::request_headers(&prepared);
+    let url = format!(
+        "{BASE_URL}/act/v2/kukuai/signinlist?tid={SIGNIN_TID}&{CLIENT_QUERY}"
+    );
+    let value = http::get_json_value(&url, &headers, None, Some(30_000)).await?;
+    let errno = value.get("errno").and_then(Value::as_i64).unwrap_or(-1);
+    if errno != 0 {
+        return Err(GatewayError::with_status(
+            502,
+            format!("KukuAI 签到状态读取失败（errno={errno}）"),
+        ));
+    }
+    let data = value.get("data").cloned().unwrap_or(Value::Null);
+    let daily_awards: Vec<String> = data
+        .get("daily_awards")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("name").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(json!({
+        "signedToday": data.get("signed_today").and_then(Value::as_i64).unwrap_or(0) == 1,
+        "continuousDays": data.get("continuous_days").and_then(Value::as_i64).unwrap_or(0),
+        "dailyAwards": daily_awards,
+    }))
+}
+
 /// 尝试上报一个任务（`POST /api/genflowpro/activity/taskcomplete`）。
 ///
 /// 返回归一后的 `{success, errno, message, reward}`：errno=0 → success=true
