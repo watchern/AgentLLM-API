@@ -10,7 +10,10 @@ packages:
   - desktop-tauri/ui-islands
   - desktop-tauri/i18n
 
-# pnpm 10+ 默认拦截依赖的 postinstall 脚本；下面放行的是确有构建脚本的：
+# pnpm 11 起用 allowBuilds 放行依赖的 postinstall 脚本（旧字段
+# onlyBuiltDependencies 在 v11 已移除、静默失效 —— CI 模式下未放行的构建
+# 脚本会直接 ERR_PNPM_IGNORED_BUILDS 报错，2026-11-02 实测）。放行的是
+# 确有构建脚本的：
 #   esbuild —— 安装期校验/回填平台二进制（vite 的传递依赖）
-onlyBuiltDependencies:
-  - esbuild
+allowBuilds:
+  esbuild: true
