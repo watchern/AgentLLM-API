@@ -4,6 +4,11 @@
 #   bash scripts/release.sh vX.Y.Z            # 自动找该 tag 的成功 build run
 #   bash scripts/release.sh vX.Y.Z <run-id>   # 或显式指定 run
 #
+# ⚠️ 推 v* tag 后 CI 现在会自动建 Release 挂附件（build.yml 的 release job，
+# 逻辑与本脚本同源），本脚本不再是发版的必经步骤 —— 留给重跑收尾（改附件 /
+# 正文后覆盖上传、纠正 pre-release 标记）与老 tag 补挂（兼容没有 release
+# job 的历史 run）。
+#
 # 做三件事：
 #   1. 下载 build 工作流的产物 artifact（windows-nsis / macos-universal /
 #      linux-desktop，以及 linux-server-amd64 / -arm64 两个容器内更新包）到 dist/；

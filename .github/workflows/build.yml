@@ -9,12 +9,13 @@ name: build
 # 本仓库是公开仓库，标准 GitHub-hosted runner（含 macOS）对公开仓库免费且
 # 不计分钟数 —— macOS runner 是私有仓库里最贵的一档，公开仓库没有这个问题。
 #
-# ── 五个 job 的分工（名字相近，别看混）────────────────────────
+# ── 六个 job 的分工（名字相近，别看混）────────────────────────
 #   macos           → macOS 桌面端 dmg           → artifact: macos-universal
 #   windows         → Windows 桌面端 NSIS exe    → artifact: windows-nsis
 #   linux-desktop   → Linux 桌面端 deb+AppImage  → artifact: linux-desktop
 #   linux-server    → Linux **服务端**包（无 GUI）→ artifact: linux-server-{amd64,arm64}
 #   windows-server  → Windows **服务端**包（无 GUI）→ artifact: windows-server-amd64
+#   release         → 五类 artifact 收拢建 GitHub Release 挂附件（只推 tag 时跑）
 #
 # 前三者是「桌面端安装包」（给用户装在自己机器上），后两者是**服务器形态**：
 # 无图形界面、命令行安装、注册成系统服务（Linux systemd / Windows SCM）。
@@ -24,9 +25,11 @@ name: build
 #   · 手动 workflow_dispatch（在 Actions 页面选分支触发）：
 #     各平台一起构建，产物作为 workflow artifact 下载，不发布 Release
 #   · 推送 v* tag：与 docker.yml 同时触发，一次打 tag 安装包与镜像全出；
-#     桌面端安装包与 Linux 服务端包只挂 workflow artifact —— GitHub
-#     Release 由发版收尾脚本在本地挂载（scripts/release.sh）：Release 本就
-#     不自动建，安装包只挂 artifact 让构建与发布解耦，发布那步重跑脚本即可
+#     五个构建 job 全绿后 release job 自动创建 GitHub Release 并挂全部
+#     附件（正文 = tag 所指提交的提交信息 = 更新日志；beta tag 带预发布
+#     后缀自动标 pre-release）。任一构建 job 失败就不发布 —— 宁可不出
+#     Release 也不挂残缺的。scripts/release.sh 退居二线：重跑收尾（附件
+#     覆盖上传）与补挂历史 tag 时仍用它，两边逻辑同源
 #
 # ── action 版本为什么都钉在大版本 v7（本次升级）─────────────────
 # 原先用 checkout@v4 / setup-node@v4 / upload-artifact@v4，三者都跑在
@@ -376,3 +379,88 @@ jobs:
           name: windows-server-amd64
           path: dist/*
           if-no-files-found: error
+
+  # ── Release 发布（只有推送 v* tag 时才跑）────────────────────
+  # 把上面五个构建 job 的 artifact 收拢，创建 GitHub Release 并挂附件。
+  #
+  # ── 为什么是 build.yml 里的一个 job，而不是独立工作流 ──────────
+  # Release 附件来自本次构建的 artifact，needs 直接依赖是最可靠的表达：
+  # 五个构建 job 全部成功才发布，任何一个失败就不出 Release —— 残缺的
+  # Release 会让某类用户（按文件名找更新包的面板更新链）抓到半套资产。
+  # 独立工作流得跨 run 找 artifact，既有竞态（构建没跑完就查）又脆。
+  #
+  # ── 与 scripts/release.sh 的关系 ─────────────────────────────
+  # 逻辑同源（Release 正文 = tag 所指提交的提交信息；tag 带预发布后缀标
+  # pre-release；重跑时附件覆盖上传）。CI 这一步是发版的默认路径，脚本
+  # 退居二线：CI 挂完后又想改附件 / 正文的重跑收尾、历史 tag 补挂仍走它。
+  release:
+    needs: [macos, windows, linux-desktop, linux-server, windows-server]
+    # 只在「推送 v* tag」时发布。手动 workflow_dispatch 即使选在 tag 上跑
+    # 也只出 artifact 不发布（与文档口径一致：手动触发 = 构建自检）
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      # 创建 Release / 上传附件要写 contents（GITHUB_TOKEN 默认只读）
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v7
+        with:
+          path: dist
+          # 六个 artifact 平铺进 dist/（不保留 artifact 名的分层目录）：
+          # Release 附件就是一个平的列表，各 artifact 内的文件名也互不
+          # 冲突（桌面端安装包自带平台后缀，服务端包自带平台前缀）
+          merge-multiple: true
+
+      - name: 创建 GitHub Release 并挂附件
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          # 预发布判定与 scripts/release.sh 同一口径：tag 带预发布后缀
+          # （v3.1.0-beta.1 里的「-beta.1」）→ 标 pre-release。这个标记是
+          # 应用内「加入 beta 版」开关的分界线：正式通道走 GitHub 的
+          # /releases/latest，它排除预发布 —— 漏标 = beta 被所有正式版
+          # 用户当成正式更新收到；误标则谁都不更新。
+          case "${TAG#v}" in
+            *-*) PRERELEASE=true ;;
+            *)   PRERELEASE=false ;;
+          esac
+          echo "→ 发布 $TAG（pre-release=$PRERELEASE）"
+
+          # 齐全性闸门：六类产物各数一遍，缺类即失败。构建 job 的
+          # if-no-files-found: error 只保证各自 artifact 非空，这里按类型
+          # 再验一遍 —— 发布出去的 Release 必须是全的，不能有多少挂多少。
+          for pattern in '*.exe' '*.dmg' '*.deb' '*.AppImage' \
+                         'agent2api-server-linux-amd64.tar.gz*' \
+                         'agent2api-server-linux-arm64.tar.gz*' \
+                         'agent2api-server-windows-amd64.zip*'; do
+            compgen -G "dist/$pattern" > /dev/null || {
+              echo "错误: dist/ 缺少 $pattern，拒绝发布残缺 Release" >&2
+              exit 1
+            }
+          done
+          ls -lh dist
+
+          # Release 正文 = tag 所指提交的提交信息（= 更新日志，写法见
+          # .agents/skills/release-flow/SKILL.md 第 5 节）。checkout 检出的
+          # 正是 tag 提交，git log -1 即得，与本地脚本同源。
+          git log -1 --format=%B > release-notes.md
+
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # 重跑场景（手动 re-run）：附件 --clobber 覆盖上传，pre-release
+            # 标记顺手纠正一遍（当初漏标的情形靠这行自愈）
+            gh release upload "$TAG" --clobber dist/*
+            gh release edit "$TAG" --prerelease="$PRERELEASE"
+            echo "↳ Release 已存在：附件覆盖上传，pre-release=$PRERELEASE"
+          else
+            gh release create "$TAG" --prerelease="$PRERELEASE" --title "$TAG" \
+              --notes-file release-notes.md dist/*
+            echo "↳ Release 已创建（pre-release=$PRERELEASE）"
+          fi

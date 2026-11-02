@@ -92,12 +92,12 @@ git push origin main
 git tag vX.Y.Z
 git push origin vX.Y.Z
 
-# 6. 两个工作流跑完后挂 GitHub Release
+# 6. 两个工作流跑完后核对 Release（CI 自动建，脚本只在重跑/补挂时用）
 gh run list --limit 4       # 手动跑 gh 前先设代理，见第 8 节
-bash scripts/release.sh vX.Y.Z
+gh release view vX.Y.Z
 ```
 
-**发布提交的提交信息 = 更新日志**，因为发版收尾脚本创建 / 更新 Release 时，正文取「tag 所指提交的提交信息」（`git log -1 --format=%B`）。
+**发布提交的提交信息 = 更新日志**，因为 CI 的 release job 与本地脚本创建 / 更新 Release 时，正文都取「tag 所指提交的提交信息」（`git log -1 --format=%B`）。
 
 - 格式沿用历史版本的编号清单，每行一条，带分类前缀：`新增：` / `优化：` / `修复：` / `更新：` / `移除：`，最后一条固定 `版本：X.Y.Z → X.Y.Z+1`；
 - 内容取「上个 tag 以来的全部提交」综合整理（`git log vX.Y.Z..HEAD --oneline`），纯 CI / 临时的调试提交归并成一条流程性描述即可；
@@ -108,7 +108,7 @@ bash scripts/release.sh vX.Y.Z
 
 | 工作流 | 产出 | 说明 |
 |---|---|---|
-| `build.yml`（build） | 桌面端三平台安装包 + Linux 服务端包 | 四个 job：`macos`（dmg）/ `windows`（NSIS exe）/ `linux-desktop`（deb + AppImage）/ `linux-server`（容器内更新用的 tar.gz）。macOS 与 Linux 桌面端的产物**只能在各自平台上构建**，无法从 Windows 交叉编译；所有产物只挂 artifact，GitHub Release 由本地脚本挂载 |
+| `build.yml`（build） | 桌面端三平台安装包 + Linux 服务端包 → 自动建 GitHub Release | 五个构建 job：`macos`（dmg）/ `windows`（NSIS exe）/ `linux-desktop`（deb + AppImage）/ `linux-server`（容器内更新用的 tar.gz）/ `windows-server`（Windows 服务端 zip）。macOS 与 Linux 桌面端的产物**只能在各自平台上构建**，无法从 Windows 交叉编译；五个构建 job 全绿后 `release` job 自动创建 GitHub Release 并挂全部附件，任一失败则不发布 |
 | `docker.yml`（docker） | Docker Hub `aimodcc/agent2api:<版本>` + `:latest`（amd64 / arm64 双架构） | 手动 `workflow_dispatch` 触发时只出 `:dev` 测试 tag，不碰正式 tag；beta tag（版本号带 `-`）只出 `<版本>`，**不移动 `:latest`** |
 
 跟踪进度：
@@ -118,14 +118,14 @@ gh run list --limit 4
 gh run watch <run-id> --exit-status
 ```
 
-**发版收尾**：GitHub Release 不由 CI 发布（Release 本来就不会自动创建），由本地脚本一步挂载：
+**发版收尾**：GitHub Release 由 CI 自动创建 —— build.yml 的 `release` job 在五个构建 job 全绿后，按 tag 提交信息（= 更新日志）建 Release、挂全部附件、按 tag 里的 `-` 自动标 pre-release。发版时只需核对，通常不用再跑脚本：
 
 ```bash
-bash scripts/release.sh vX.Y.Z            # 自动找该 tag 的成功 build run
-bash scripts/release.sh vX.Y.Z <run-id>   # 或显式指定 run
+gh release view vX.Y.Z                    # 手动跑 gh 前先设代理，见第 8 节
+bash scripts/release.sh vX.Y.Z [run-id]   # 仅重跑收尾（覆盖附件/纠正标记）或老 tag 补挂时用
 ```
 
-脚本做三件事：下载 build 的安装包 artifact 到 `dist/` → 按 tag 提交信息（= 更新日志）创建 / 更新 GitHub Release 并挂附件 → 打印验收提示。幂等可重跑（`--clobber` 覆盖附件）。
+脚本与 CI 逻辑同源：下载 build 的安装包 artifact 到 `dist/` → 创建 / 更新 Release 并挂附件 → 打印验收提示。幂等可重跑（`--clobber` 覆盖附件）。
 
 ## 6. beta 版（预发布）
 
@@ -150,9 +150,9 @@ git push origin beta
 git tag v3.1.0-beta.1
 git push origin v3.1.0-beta.1
 
-# 5. 两个工作流跑完后挂 Release（脚本按 tag 里的 `-` 自动标 pre-release）
+# 5. 两个工作流跑完后核对 Release（CI 自动建，并按 tag 里的 `-` 标 pre-release）
 gh run list --limit 4
-bash scripts/release.sh v3.1.0-beta.1
+gh release view v3.1.0-beta.1
 ```
 
 验收就三条：Release 显示 **Prerelease**、exe / dmg / deb / AppImage 附件齐全、Docker Hub 上 `:latest` 的 Pushed 时间**没有**跟着变（完整清单见第 7 节）。
@@ -160,7 +160,7 @@ bash scripts/release.sh v3.1.0-beta.1
 **三处不能错**，每处错了都有明确症状：
 
 1. **五处版本号漏了后缀**（写成 `3.1.0`）：比较是按 semver 做的，运行版本 `3.1.0` 对线上 tag `3.1.0-beta.1` 会判成「当前比线上新」，**beta 用户永远收不到更新**。五个文件都接受带后缀的版本号（Cargo / npm / tauri.conf.json 都认），照 tag 抄即可。
-2. **Release 漏标 pre-release**：标记就是开关的分界线 —— 正式通道走 GitHub 的 `/releases/latest`，它排除预发布，只有开了开关的人从 `/releases` 列表里看到 beta。**漏标 = beta 被所有正式版用户当成正式更新收到。** `scripts/release.sh` 已按「tag 里带 `-`」自动标记，重跑收尾时也会把标记纠正回来，走脚本就不用操心。
+2. **Release 漏标 pre-release**：标记就是开关的分界线 —— 正式通道走 GitHub 的 `/releases/latest`，它排除预发布，只有开了开关的人从 `/releases` 列表里看到 beta。**漏标 = beta 被所有正式版用户当成正式更新收到。** CI 的 release job 与 `scripts/release.sh` 都按「tag 里带 `-`」自动标记，重跑收尾时也会把标记纠正回来，不用操心。
 3. **tag 打在 `main` 上**：beta 是集成分支，beta 版要的是它的快照。打在 `main` 上要么不含 beta 分支的新改动（白测一场），要么等于把还没发布的改动提前推进 `main`。
 
 docker 的 `:latest` 不会被 beta tag 移动（`.github/workflows/docker.yml`），镜像仍出 `3.1.0-beta.1` 那个版本 tag，想尝鲜的按版本号拉。
