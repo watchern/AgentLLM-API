@@ -114,7 +114,11 @@ jobs:
       # package.json 里那条脚本叫 `build`（见 desktop-tauri/package.json）。
       # 直接用 CLI 更直白，也少一层 action 的版本耦合。
       - name: 构建 macOS 安装包
-        run: pnpm -C desktop-tauri run build -- --target universal-apple-darwin
+        # pnpm 不会像 npm 那样吞掉 `--`：写 `run build -- --target` 会把
+        # 游离的 `--` 也传进脚本，tauri CLI（clap）把其后的参数当位置参数，
+        # 直接报 unexpected argument（2026-11-03 实测，本 job 因此从未绿过）。
+        # pnpm 传参直接跟在脚本名后即可，见仓库内 pnpm 11.28.8 的 argv 实验。
+        run: pnpm -C desktop-tauri run build --target universal-apple-darwin
 
       - name: 上传产物
         uses: actions/upload-artifact@v7
@@ -230,8 +234,9 @@ jobs:
 
       # 不走 tauri-action：它的默认脚本是 `npm run tauri build`，而本项目的
       # package.json 里那条脚本叫 `build`（同 macOS job 的说明）。
+      # 传参不带 `--`：pnpm 会把 `--` 原样透传（见 macOS job 的说明）。
       - name: 构建 Linux 桌面端安装包
-        run: pnpm -C desktop-tauri run build -- --config src-tauri/tauri.linux.conf.json
+        run: pnpm -C desktop-tauri run build --config src-tauri/tauri.linux.conf.json
 
       - name: 上传产物
         uses: actions/upload-artifact@v7
