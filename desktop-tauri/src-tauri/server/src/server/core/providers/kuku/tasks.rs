@@ -144,19 +144,35 @@ fn task_row(task: &Value) -> Value {
 /// `uid` 是会话三件套里的 `uk`（Baidu 数字用户 id），`tid` 是客户端内置
 /// 生产配置的 signin30Tid。**无 jsToken 要求**（与 activity/freepoint 两族
 /// 不同），实测网关侧可完整执行：签到后 `signed_today` 翻转、连签天数与
-/// 下一奖励（网盘会员天卡等）照常推进。已签日再 POST 返回 8001「账号异常」
-/// （误导性文案，实测语义 = 今日已签）——以 homepage 的 `signed_today`
-/// 为准，不拿它当失败。
+/// 下一奖励（网盘会员天卡等）照常推进。成败一律以 homepage 的
+/// `signed_today` 为准；动作若被服务端拒绝（errno=8001「账号异常，无法
+/// 参与活动」，活动侧风控 —— 2026-11-03 实测此时账号并未签上，旧注释
+/// 把它当「已签」是错的），把 errmsg 如实透出。
 ///
 /// 返回归一后的 `{signedToday, continuousDays, nextRewardDays,
 /// nextRewardAward, alreadySigned}`；读取失败返回 Err。
+/// act（kukuai30）请求头：在标准头基础上把 UA 换成客户端同款
+/// （`ACT_USER_AGENT`，理由见该常量与 `do_signin` 的 8001 教训）。
+fn act_headers(prepared: &credentials::KukuCredentials) -> Vec<(String, String)> {
+    credentials::request_headers(prepared)
+        .into_iter()
+        .map(|(name, value)| {
+            if name.eq_ignore_ascii_case("User-Agent") {
+                (name, super::ACT_USER_AGENT.to_string())
+            } else {
+                (name, value)
+            }
+        })
+        .collect()
+}
+
 async fn signin30_homepage_raw(
     credentials: &credentials::KukuCredentials,
     uid: &str,
 ) -> Result<Value, GatewayError> {
     const SIGNIN30_TID: &str = "291651792210";
     let prepared = credentials::with_business_stoken(credentials).await;
-    let headers = credentials::request_headers(&prepared);
+    let headers = act_headers(&prepared);
     let url = format!(
         "{BASE_URL}/act/v2/kukuai30/homepage?uid={uid}&tid={SIGNIN30_TID}&{CLIENT_QUERY}"
     );
@@ -185,8 +201,12 @@ pub async fn signin_state(
 }
 
 /// 执行真实签到（kukuai30）。已签（homepage 先判）直接返回 alreadySigned；
-/// 动作后无论服务端回什么，都以**复读 homepage 的 signed_today** 为准 ——
-/// 已签日的重复 POST 会回 8001「账号异常」，那不是失败。
+/// 动作后无论服务端回什么，都以**复读 homepage 的 signed_today** 为准。
+///
+/// 动作响应**必须收下**（2026-11-03 教训）：未签时服务端会回 errno=8001
+/// 「账号异常，无法参与活动」（活动侧风控拒绝 —— 复读 signed_today=false
+/// 证实它不是「已签」，旧注释把它当已签是错的），用户需要看到这个真实
+/// 原因而不是一句误导性的「今日已签到」。
 ///
 /// 返回 `{success, alreadySigned, signedToday, continuousDays,
 /// nextRewardDays, nextRewardAward, message}`。
@@ -195,7 +215,7 @@ pub async fn do_signin(
 ) -> Result<Value, GatewayError> {
     let triple = super::session::ensure_tokens(credentials, None, false).await?;
     let uid = triple.uk.trim().to_string();
-    // 先看状态：已签就不发动作（避免 8001 噪音）
+    // 先看状态：已签就不发动作
     let before = signin30_homepage_raw(credentials, &uid).await?;
     let signed_before = before.get("signed_today").and_then(Value::as_bool).unwrap_or(false);
     if signed_before {
@@ -204,17 +224,35 @@ pub async fn do_signin(
         return Ok(result);
     }
     let prepared = credentials::with_business_stoken(credentials).await;
-    let headers = credentials::request_headers(&prepared);
+    let headers = act_headers(&prepared);
     let url = format!(
         "{BASE_URL}/act/v2/kukuai30/signin?uid={uid}&tid=291651792210&{CLIENT_QUERY}"
     );
-    // 动作本身不校验响应内容（已签日会回 8001），成败以复读为准
-    let _ = http::post_json_value(&url, &headers, &json!({}), None, Some(30_000)).await;
+    // 动作响应收下来（errno / errmsg 是拒绝原因的唯一来源）；HTTP 层失败不
+    // 在这里断言成败 —— 成败仍以复读 homepage 的 signed_today 为准
+    let action = http::post_json_value(&url, &headers, &json!({}), None, Some(30_000))
+        .await
+        .unwrap_or(Value::Null);
+    let action_errno = action.get("errno").and_then(Value::as_i64);
+    let action_msg = ["show_msg", "errmsg", "message"]
+        .iter()
+        .find_map(|key| action.get(key).and_then(Value::as_str))
+        .unwrap_or("");
     tokio::time::sleep(std::time::Duration::from_millis(900)).await;
     let after = signin30_homepage_raw(credentials, &uid).await?;
     let signed_now = after.get("signed_today").and_then(Value::as_bool).unwrap_or(false);
     let mut result = signin_result(&after, signed_now);
     result["alreadySigned"] = json!(false);
+    if !signed_now {
+        // 未签上：把服务端的拒绝原因如实带出（8001 = 账号异常，无法参与
+        // 活动 —— 活动侧风控；客户端遇到同一 errno 也会弹同样的文案）。
+        // 旧实现此时回「今日已签到」，把失败伪装成了另一种成功。
+        result["message"] = json!(match (action_errno, action_msg) {
+            (Some(code), "") => format!("服务端拒绝签到（errno {code}）"),
+            (Some(code), msg) => format!("服务端拒绝签到（errno {code}：{msg}）"),
+            (None, _) => "签到动作未生效（服务端未报错，但面板仍显示未签）".to_string(),
+        });
+    }
     Ok(result)
 }
 
